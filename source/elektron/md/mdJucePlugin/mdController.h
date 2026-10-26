@@ -55,6 +55,8 @@ namespace mdJucePlugin
 		{
 			return m_haveKit.load(std::memory_order_acquire);
 		}
+		// Host parameters that map to firmware CCs; panel controls are excluded.
+		size_t getAutomationParameterCount() const { return m_automationSlots.size(); }
 		uint64_t getTransmittedAutomationChangeCount() const
 		{
 			return m_transmittedAutomationChanges.load(std::memory_order_acquire);

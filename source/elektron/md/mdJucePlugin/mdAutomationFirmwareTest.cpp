@@ -96,7 +96,8 @@ namespace
 			const auto mutePage = _model == md::MachineModel::Monomachine
 				? md::automation::monomachine::Mute
 				: md::automation::machinedrum::Mute;
-			if(description.page == mutePage)
+			if(description.page == mutePage
+				|| md::panelParameters::isPanelPage(description.page))
 				continue;
 			const auto value = (ordinal * 37 + 19) & 0x7f;
 			hostWrite(*automationParameter, value);
@@ -137,10 +138,10 @@ namespace
 		harness.process(32);
 		const auto restoredWrites = controller.getTransmittedAutomationChangeCount()
 			- beforeRestoreFlush;
-		require(restoredWrites >= audioProcessor.getParameters().size(),
+		require(restoredWrites >= controller.getAutomationParameterCount(),
 			"DAW-state automation snapshot flushed "
 			+ std::to_string(restoredWrites) + " of "
-			+ std::to_string(audioProcessor.getParameters().size())
+			+ std::to_string(controller.getAutomationParameterCount())
 			+ " values back to firmware");
 
 		std::cout << "mdAutomationFirmwareTest: "

@@ -1,5 +1,7 @@
 #include "jucePluginLib/parameterdescriptions.h"
 #include "mdLib/mdautomation.h"
+#include "mdLib/mdpanelgesturemapper.h"
+#include "mdLib/mdpanelparameters.h"
 #include "mdRealtimeQueue.h"
 
 #include <array>
@@ -63,6 +65,10 @@ namespace
 		{
 			for(const auto& description : _descriptions.getDescriptions())
 			{
+				// Panel parameters are global and live in their own version group;
+				// they are verified separately so this contract stays untouched.
+				if(md::panelParameters::isPanelPage(description.page))
+					continue;
 				// This mirrors Parameter::genId() and Controller::registerParams(). Any
 				// change here is a DAW project/automation compatibility decision.
 				const auto id = std::to_string(description.page) + "_"
@@ -88,19 +94,111 @@ namespace
 		return hash;
 	}
 
+	const pluginLib::Description* findDescription(
+		const pluginLib::ParameterDescriptions& _descriptions, const uint8_t _page,
+		const uint8_t _index)
+	{
+		for(const auto& description : _descriptions.getDescriptions())
+			if(description.page == _page && description.index == _index)
+				return &description;
+		return nullptr;
+	}
+
+	void requirePanelParameter(const pluginLib::Description* const _description,
+		const bool _supported, const bool _isBool, const std::string& _what)
+	{
+		if(!_supported)
+		{
+			require(_description == nullptr, _what + " has a parameter but no verified panel packet");
+			return;
+		}
+		require(_description != nullptr, _what + " is verified but has no parameter");
+		require(_description->isNonPartSensitive(), _what + " must be a single global parameter");
+		require(_description->version == md::panelParameters::Version,
+			_what + " must be registered in the panel version group");
+		require(_description->isPublic, _what + " must be visible to the host");
+		require(_description->isDiscrete, _what + " must be discrete");
+		require(_description->isBool == _isBool, _what + " has the wrong bool flag");
+		require(_description->range.getStart() == 0, _what + " must start at 0");
+		if(_isBool)
+		{
+			require(_description->range.getEnd() == 1, _what + " must be 0/1");
+			require(_description->defaultValue == 0, _what + " must default to released");
+		}
+		else
+		{
+			require(_description->range.getEnd() == md::PanelGestureMapper::g_encoderMaximum,
+				_what + " must span one relative tick per step");
+			require(_description->defaultValue == md::PanelGestureMapper::g_encoderCentre,
+				_what + " must default to the centre");
+		}
+		require(_description->displayName.rfind("Panel ", 0) != 0,
+			_what + " display name must not repeat the Panel prefix");
+	}
+
+	void verifyPanel(const char* const _filename, const md::MachineModel _model,
+		const pluginLib::ParameterDescriptions& _descriptions,
+		const size_t _expectedPanelParameterCount)
+	{
+		using md::PanelControl;
+		using md::PanelEncoder;
+		using Mapper = md::PanelGestureMapper;
+		namespace pp = md::panelParameters;
+
+		size_t expected = 0;
+		for(uint8_t c = 0; c <= static_cast<uint8_t>(PanelControl::ClassicExtended); ++c)
+		{
+			const auto control = static_cast<PanelControl>(c);
+			const auto supported = Mapper::supportsButton(_model, control);
+			expected += supported ? 1 : 0;
+			requirePanelParameter(findDescription(_descriptions, pp::ButtonPage, c), supported, true,
+				std::string(_filename) + " button " + md::panelControlName(control));
+		}
+		for(uint8_t e = 0; e <= static_cast<uint8_t>(PanelEncoder::SoundSelection); ++e)
+		{
+			const auto encoder = static_cast<PanelEncoder>(e);
+			const auto rotary = Mapper::supportsEncoder(_model, encoder);
+			const auto push = Mapper::supportsEncoderPush(_model, encoder);
+			expected += (rotary ? 1 : 0) + (push ? 1 : 0);
+			requirePanelParameter(findDescription(_descriptions, pp::EncoderPage, e), rotary, false,
+				std::string(_filename) + " encoder " + md::panelEncoderName(encoder));
+			requirePanelParameter(findDescription(_descriptions, pp::EncoderPushPage, e), push, true,
+				std::string(_filename) + " encoder push " + md::panelEncoderName(encoder));
+		}
+
+		size_t panelCount = 0;
+		std::set<std::string> displayNames;
+		for(const auto& description : _descriptions.getDescriptions())
+		{
+			if(!pp::isPanelPage(description.page))
+				continue;
+			++panelCount;
+			require(displayNames.insert(description.displayName).second,
+				std::string(_filename) + " duplicate panel display name " + description.displayName);
+		}
+		require(panelCount == expected, std::string(_filename) + " has unexpected panel parameters");
+		if(panelCount != _expectedPanelParameterCount)
+			std::cerr << _filename << " panel parameter count is " << panelCount << '\n';
+		require(panelCount == _expectedPanelParameterCount,
+			"panel parameter count changed; this is a host compatibility decision");
+	}
+
 	void verify(const char* const _filename, const md::MachineModel _model,
 		const size_t _trackParameterCount, const uint8_t _trackCount,
 		const size_t _expectedHostParameterCount,
-		const uint64_t _expectedHostContractFingerprint)
+		const uint64_t _expectedHostContractFingerprint,
+		const size_t _expectedPanelParameterCount)
 	{
 		const auto descriptions = load(_filename);
 		require(descriptions.isValid(), descriptions.getErrors());
-		require(descriptions.getDescriptions().size() == _trackParameterCount,
-			std::string(_filename) + " has the wrong description count");
 
+		size_t trackDescriptionCount = 0;
 		std::set<std::pair<uint8_t, uint8_t>> addresses;
 		for(const auto& description : descriptions.getDescriptions())
 		{
+			if(md::panelParameters::isPanelPage(description.page))
+				continue;
+			++trackDescriptionCount;
 			require(!description.isNonPartSensitive(),
 				"automation parameters must belong to firmware tracks");
 
@@ -126,6 +224,8 @@ namespace
 			}
 		}
 
+		require(trackDescriptionCount == _trackParameterCount,
+			std::string(_filename) + " has the wrong track description count");
 		require(_trackParameterCount * _trackCount
 			== _expectedHostParameterCount, "host parameter count changed");
 		const auto fingerprint = hostContractFingerprint(descriptions, _trackCount);
@@ -135,6 +235,7 @@ namespace
 				<< fingerprint << '\n';
 			require(false, "host parameter IDs/order/names/ranges/defaults changed");
 		}
+		verifyPanel(_filename, _model, descriptions, _expectedPanelParameterCount);
 	}
 
 	void verifyRealtimeQueue()
@@ -195,9 +296,9 @@ int main()
 {
 	verifyRealtimeQueue();
 	verify("parameterDescriptions_md.json", md::MachineModel::Machinedrum,
-		26, md::automation::machinedrum::TrackCount, 416, 6612241820543455307ull);
+		26, md::automation::machinedrum::TrackCount, 416, 6612241820543455307ull, 55);
 	verify("parameterDescriptions_mm.json", md::MachineModel::Monomachine,
-		58, md::automation::monomachine::TrackCount, 348, 15680169437425968391ull);
+		58, md::automation::monomachine::TrackCount, 348, 15680169437425968391ull, 61);
 	std::cout << "mdAutomationParameterTest: PASS\n";
 	return 0;
 }

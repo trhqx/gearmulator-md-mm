@@ -4,6 +4,7 @@
 #include "mdPluginProcessor.h"
 
 #include "mdLib/mdautomation.h"
+#include "mdLib/mdpanelparameters.h"
 #include "mdLib/mddevice.h"
 #include "mdLib/mdsysexautomation.h"
 
@@ -211,8 +212,8 @@ namespace mdAutomationTest
 		{
 			auto* const parameter =
 				dynamic_cast<pluginLib::Parameter*>(audioParameter);
-			if(parameter && (_includeMutes
-				|| parameter->getDescription().page != mutePage))
+			if(parameter && !md::panelParameters::isPanelPage(parameter->getDescription().page)
+				&& (_includeMutes || parameter->getDescription().page != mutePage))
 				result.push_back(parameter);
 		}
 		return result;

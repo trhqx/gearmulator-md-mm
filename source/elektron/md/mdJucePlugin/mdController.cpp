@@ -2,6 +2,7 @@
 
 #include "mdPluginProcessor.h"
 #include "mdLib/mdautomation.h"
+#include "mdLib/mdpanelparameters.h"
 #include "mdLib/mddevice.h"
 #include "mdLib/mdsysexautomation.h"
 
@@ -41,12 +42,16 @@ namespace mdJucePlugin
 	{
 		registerParams(_p, [](const uint8_t _part, const bool _nonPartSensitive)
 		{
-			return _nonPartSensitive ? juce::String("Global")
+			// The only global parameters are the front-panel controls.
+			return _nonPartSensitive ? juce::String("Panel")
 				: juce::String("Track ") + juce::String(_part + 1);
 		});
 		for(const auto& [address, parameters] : getExposedParameters())
 		{
 			(void)parameters;
+			// Panel controls are gestures for the front panel, not firmware CCs.
+			if(md::panelParameters::isPanelPage(address.page))
+				continue;
 			const Address automationAddress{address.page, address.partNum,
 				address.paramNum};
 			const auto slotIndex = m_automationSlots.size();
@@ -116,10 +121,12 @@ namespace mdJucePlugin
 			&& m_haveKit.load(std::memory_order_acquire)
 			&& m_currentKit.load(std::memory_order_acquire) != 0xff;
 		std::vector<uint64_t> publications;
-		publications.reserve(getExposedParameters().size());
+		publications.reserve(m_automationSlots.size());
 		bool hasPendingIntent = false;
 		for(const auto& [address, parameters] : getExposedParameters())
 		{
+			if(md::panelParameters::isPanelPage(address.page))
+				continue;
 			if(parameters.empty())
 				return {};
 			const auto* const slot = findAutomationSlot(
@@ -136,12 +143,12 @@ namespace mdJucePlugin
 		if(!complete && !hasPendingIntent)
 			return {};
 		std::vector<uint8_t> result;
-		result.reserve(7 + getExposedParameters().size() * 5);
+		result.reserve(7 + m_automationSlots.size() * 5);
 		result.push_back(g_snapshotVersion);
 		result.push_back(static_cast<uint8_t>(m_model));
 		result.push_back(getAutomationBaseChannel());
 		result.push_back(m_currentKit.load(std::memory_order_acquire));
-		const auto count = static_cast<uint16_t>(getExposedParameters().size());
+		const auto count = static_cast<uint16_t>(m_automationSlots.size());
 		result.push_back(static_cast<uint8_t>(count >> 8));
 		result.push_back(static_cast<uint8_t>(count & 0xff));
 		result.push_back(complete ? g_snapshotComplete : 0);
@@ -149,6 +156,8 @@ namespace mdJucePlugin
 		for(const auto& [address, parameters] : getExposedParameters())
 		{
 			(void)parameters;
+			if(md::panelParameters::isPanelPage(address.page))
+				continue;
 			const auto publication = publications[publicationIndex++];
 			result.push_back(address.page);
 			result.push_back(address.partNum);
@@ -181,7 +190,7 @@ namespace mdJucePlugin
 		const auto complete = version == 1
 			|| (_snapshot[6] & g_snapshotComplete) != 0;
 		if(_snapshot.size() != headerSize + count * entrySize
-			|| count != getExposedParameters().size()
+			|| count != m_automationSlots.size()
 			|| (version == g_snapshotVersion && (_snapshot[6] & ~g_snapshotComplete))
 			|| !(_snapshot[2] < 16 || _snapshot[2] == 0x7f)
 			|| (complete && _snapshot[3] >= kitCount)
@@ -398,6 +407,9 @@ namespace mdJucePlugin
 		const pluginLib::ParamValue _value, const pluginLib::Parameter::Origin _origin)
 	{
 		const auto& description = _parameter.getDescription();
+		// Panel gestures are delivered to the emulated front panel, never as CCs.
+		if(md::panelParameters::isPanelPage(description.page))
+			return;
 		const md::automation::ParameterChange change{
 			description.page,
 			_parameter.getPart(),
