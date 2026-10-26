@@ -19,3 +19,9 @@ _copilot.bat
 target/logs/
 claude*.bat
 .mcp.json
+
+# Firmware images and OS dumps are copyrighted and must never be committed
+*.bin
+*.BIN
+[Ee]lektron_*.syx
+[Ee]lektron_*.SYX
