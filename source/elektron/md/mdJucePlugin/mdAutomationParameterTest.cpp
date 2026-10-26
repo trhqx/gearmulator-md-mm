@@ -157,10 +157,13 @@ namespace
 		for(uint8_t e = 0; e <= static_cast<uint8_t>(PanelEncoder::SoundSelection); ++e)
 		{
 			const auto encoder = static_cast<PanelEncoder>(e);
-			const auto rotary = Mapper::supportsEncoder(_model, encoder);
 			const auto push = Mapper::supportsEncoderPush(_model, encoder);
-			expected += (rotary ? 1 : 0) + (push ? 1 : 0);
-			requirePanelParameter(findDescription(_descriptions, pp::EncoderPage, e), rotary, false,
+			expected += push ? 1 : 0;
+			// Encoders have no host parameter: a relative control mapped to an
+			// absolute host value has to be recentred, and every recentre would show
+			// up in the host's automation. Their effect is recorded on the real track
+			// parameters the firmware reports instead.
+			requirePanelParameter(findDescription(_descriptions, pp::EncoderPage, e), false, false,
 				std::string(_filename) + " encoder " + md::panelEncoderName(encoder));
 			requirePanelParameter(findDescription(_descriptions, pp::EncoderPushPage, e), push, true,
 				std::string(_filename) + " encoder push " + md::panelEncoderName(encoder));
@@ -296,9 +299,9 @@ int main()
 {
 	verifyRealtimeQueue();
 	verify("parameterDescriptions_md.json", md::MachineModel::Machinedrum,
-		26, md::automation::machinedrum::TrackCount, 416, 6612241820543455307ull, 55);
+		26, md::automation::machinedrum::TrackCount, 416, 6612241820543455307ull, 45);
 	verify("parameterDescriptions_mm.json", md::MachineModel::Monomachine,
-		58, md::automation::monomachine::TrackCount, 348, 15680169437425968391ull, 61);
+		58, md::automation::monomachine::TrackCount, 348, 15680169437425968391ull, 52);
 	std::cout << "mdAutomationParameterTest: PASS\n";
 	return 0;
 }

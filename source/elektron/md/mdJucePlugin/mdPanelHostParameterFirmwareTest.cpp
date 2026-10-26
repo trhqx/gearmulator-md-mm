@@ -5,6 +5,7 @@
 
 #include "mdLib/mdfrontpanel.h"
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -96,26 +97,35 @@ namespace
 		controller.setHostButtonsTap(false);
 	}
 
-	void verifyEncoder(Harness& _harness)
+	// Turning a panel encoder must reach the host as the real parameter under it
+	// (here machine/synthesis parameter 1 of track 1 on the default page): the
+	// firmware reports the change and the controller publishes it, so a host
+	// records absolute values on that parameter instead of encoder movements.
+	void verifyEncoderTurnRecordsTrackParameter(Harness& _harness, const md::MachineModel _model)
 	{
 		auto& controller = _harness.controller;
-		auto& encoder = panelParameter(controller, "PanelEncoderDataEntryA");
-		const auto before = lcdFingerprint(frontPanel(_harness));
-		const auto beforeTicks = controller.getDeliveredPanelEventCount();
-
-		// Turn up, then down past the start, so a parameter at either end of its
-		// range still produces a visible change.
-		hostWrite(encoder, 70);
-		_harness.process(64);
-		const auto afterUp = lcdFingerprint(frontPanel(_harness));
-		hostWrite(encoder, 58);
-		_harness.process(64);
-		const auto afterDown = lcdFingerprint(frontPanel(_harness));
-
-		require(controller.getDeliveredPanelEventCount() == beforeTicks + 6 + 8,
-			"encoder positions did not become the expected capped tick count");
-		require(afterUp != before || afterDown != afterUp,
-			"host-parameter encoder turns did not change the LCD");
+		auto* const target = controller.getParameter(
+			_model == md::MachineModel::Monomachine ? "SynthesisA" : "MachineParameter1", 0);
+		require(target != nullptr, "track 1 parameter 1 is missing");
+		require(controller.getParameter("PanelEncoderDataEntryA", 0) == nullptr,
+			"encoders must not be host parameters");
+		const auto command = *md::panelEncoderCommand(_model, md::PanelEncoder::DataEntryA);
+		const auto before = target->getUnnormalizedValue();
+		const auto turn = [&](const uint8_t _direction)
+		{
+			_harness.processor.getPlugin().withDeviceLocked([&](synthLib::Device* const _device)
+			{
+				if(auto* const device = dynamic_cast<md::Device*>(_device))
+					for(int i = 0; i < 6; ++i)
+						device->sendPanelEvent(command, _direction);
+			});
+			_harness.process(200);
+		};
+		turn(before < 100 ? 0x01 : 0xff);
+		const auto after = target->getUnnormalizedValue();
+		require(after != before, "a panel encoder turn did not reach the track parameter ("
+			+ std::to_string(before) + " -> " + std::to_string(after) + ")");
+		require(std::abs(after - before) == 6, "the track parameter did not follow the encoder exactly");
 	}
 
 	void verifyStateLoadReleasesHeldControls(Harness& _harness)
@@ -177,7 +187,7 @@ namespace
 			verifyRecordButton(harness);
 			verifyTapMode(harness);
 		}
-		verifyEncoder(harness);
+		verifyEncoderTurnRecordsTrackParameter(harness, _model);
 		verifyStateLoadReleasesHeldControls(harness);
 
 		std::cout << "mdPanelHostParameterFirmwareTest: " << modelName(_model) << " PASS\n";

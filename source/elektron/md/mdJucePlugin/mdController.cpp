@@ -147,23 +147,6 @@ namespace mdJucePlugin
 			parameter->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
 	}
 
-	void Controller::notePanelEncoderTurnFromUi(const md::PanelEncoder _encoder, const int _steps)
-	{
-		const auto index = static_cast<uint8_t>(_encoder);
-		const auto& parameters = findSynthParam(0, md::panelParameters::EncoderPage, index);
-		if(parameters.empty() || _steps == 0)
-			return;
-		const auto current = parameters.front()->getUnnormalizedValue();
-		const auto next = std::clamp(current + _steps, 0,
-			static_cast<int>(md::PanelGestureMapper::g_encoderMaximum));
-		if(next == current)
-			return;
-		m_panelInput.post(md::panelParameters::EncoderPage, index, next,
-			PanelHostInput::Delivery::AlreadyDelivered, PanelHostInput::Source::Editor);
-		for(auto* const parameter : parameters)
-			parameter->setUnnormalizedValueNotifyingHost(next, pluginLib::Parameter::Origin::Ui);
-	}
-
 	void Controller::drainPanelInput()
 	{
 		auto& plugin = getProcessor().getPlugin();
@@ -192,25 +175,6 @@ namespace mdJucePlugin
 					m_deliveredPanelEvents.fetch_add(1, std::memory_order_acq_rel);
 			});
 		});
-	}
-
-	void Controller::serviceRecentreRequests()
-	{
-		auto requests = m_panelInput.takeRecentreRequests();
-		for(uint8_t encoder = 0; requests != 0; ++encoder, requests >>= 1)
-		{
-			if((requests & 1) == 0)
-				continue;
-			// Publish the centre so a host in relative mode continues from it. The
-			// echo is recognised as a recentre and moves no encoder; post it directly
-			// as well, since not every host echoes plugin-initiated changes.
-			for(auto* const parameter : findSynthParam(0, md::panelParameters::EncoderPage, encoder))
-				parameter->setUnnormalizedValueNotifyingHost(
-					static_cast<int>(md::PanelGestureMapper::g_encoderCentre),
-					pluginLib::Parameter::Origin::Ui);
-			m_panelInput.post(md::panelParameters::EncoderPage, encoder,
-				md::PanelGestureMapper::g_encoderCentre);
-		}
 	}
 
 	std::vector<uint8_t> Controller::createAutomationSnapshot() const
@@ -462,8 +426,6 @@ namespace mdJucePlugin
 				for(auto* const parameter : parameters)
 					parameter->flushRealtimeValueToUi();
 			}
-			// Host notifications for recentred encoders belong on the message thread.
-			serviceRecentreRequests();
 		}
 		drainRealtimeParameterChanges(RealtimeAutomationCapacity, false);
 		completeSynchronizationIfReady();

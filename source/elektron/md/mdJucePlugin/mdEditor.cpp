@@ -1849,8 +1849,6 @@ namespace mdJucePlugin
 		const auto count = std::min(std::abs(_steps), g_encoderBurstCap);
 		for(int step = 0; step < count; ++step)
 			(void)sendPanelEvent(*command, argument);
-		// Let the host see the turn (Configure, automation) without a second delivery.
-		m_controller.notePanelEncoderTurnFromUi(_encoder, _steps > 0 ? count : -count);
 	}
 
 	void Editor::setPanelPacket(const md::PanelPacket& _packet, const bool _pressed) const

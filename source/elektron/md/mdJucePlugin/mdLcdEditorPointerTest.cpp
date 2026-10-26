@@ -262,26 +262,13 @@ namespace
 		require(playRecorder.begins >= 1 && playRecorder.begins == playRecorder.ends,
 			"Play click did not report a complete host gesture");
 
-		auto* const encoder = controller.getParameter("PanelEncoderDataEntryA", 0);
-		require(encoder != nullptr, "Panel Encoder A parameter is missing");
-		// Earlier drags in this test saturated the parameter; without a running
-		// machine nothing recentres it, so start from the centre explicitly.
-		encoder->setUnnormalizedValueNotifyingHost(64, pluginLib::Parameter::Origin::Ui);
-		const auto before = encoder->getUnnormalizedValue();
-		HostParameterRecorder encoderRecorder;
-		encoder->addListener(&encoderRecorder);
-		mdJucePlugin::EditorIdentityTestAccess::publishPanel(_editor, makeStandardPanel(_model));
-		const auto point = encoderCenter(_canvas, LayoutKind::Standard, 0);
-		_context.ProcessMouseMove(point.x, point.y, 0);
-		_context.ProcessMouseButtonDown(0, 0);
-		_context.ProcessMouseMove(point.x + 30, point.y, 0);
-		_context.ProcessMouseButtonUp(0, 0);
-		encoder->removeListener(&encoderRecorder);
-		require(encoder->getUnnormalizedValue() > before,
-			"turning DATA ENTRY A in the editor did not move its host parameter");
-		require(!encoderRecorder.values.empty() && encoderRecorder.begins >= 1
-			&& encoderRecorder.begins == encoderRecorder.ends,
-			"editor encoder turn did not notify the host with a gesture");
+		// Encoders are deliberately not host parameters: their effect reaches the
+		// host on the real track parameter the firmware reports.
+		require(controller.getParameter("PanelEncoderDataEntryA", 0) == nullptr,
+			"editor encoders must not be exposed as host parameters");
+		(void)_editor;
+		(void)_canvas;
+		(void)_model;
 	}
 
 	void exerciseCells(mdJucePlugin::Editor& _editor, Rml::Context& _context,

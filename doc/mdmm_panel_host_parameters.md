@@ -374,3 +374,35 @@ Einstellung auf der Settings-Seite „MIDI-mapped panel buttons tap"
   ergibt im Antippen-Modus zwei Drücke.
 - Tests: `mdPanelHostInputTest` (Tap-Fälle), `mdPanelHostParameterFirmwareTest`
   (RECORD-LED schaltet bei 0→1 und bei 1→0 je einmal um).
+
+## Neuausrichtung der Encoder (2026-10-26)
+
+Nach der Abnahme in Live: Die Rücksprünge der Encoder-Parameter tauchen in
+Live auf und werden aufgezeichnet. Das ist bei Host-Parametern nicht
+vermeidbar. Live führt einen absoluten Wert mit 127 Stufen, ein relativer
+Encoder kommt ohne Zurücksetzen nur ~63 Rasten weit, und mit Zurücksetzen
+springt der Wert.
+
+**Beobachtung mit ROM:** Die Firmware sendet bei jeder Encoder-Drehung einen
+CC für den Parameter, der auf der aktuellen Seite und dem aktuellen Track
+unter dem Encoder liegt. Der Controller überträgt ihn auf den Track-Parameter
+und meldet ihn dem Host. Gemessen: MD Encoder A +6 ergab „Track 1 Machine
+Parameter 1" 61 → 67, MM ergab „Track 1 Synthesis A" 85 → 91. Live zeichnet
+also bereits **absolute Werte der echten Parameter** auf.
+
+**Entscheidung:**
+- Die Encoder sind **keine Host-Parameter** mehr. Seite 101 entfällt:
+  MD hat jetzt 45, MM 52 Panel-Parameter. Auch GUI-Drehungen bewegen keinen
+  Host-Wert. Das Zurücksetzen entfällt.
+- Aufgezeichnet werden nur die echten Track-Parameter, über die
+  Firmware-Rückmeldung.
+- **Encoder-Eingabe vom Controller** folgt wie an der Hardware der offenen
+  Seite. Sie läuft über einen eigenen MIDI-Eingang des Plugins (Gerät direkt
+  wählbar, Learn im Plugin) und nicht über Live, damit sie keine
+  Automationsspuren hinterlässt. Grundlage ist PR #93 („Panel MIDI").
+- Tasten bleiben zusätzlich Host-Parameter (Configure), mit Antippen-Modus.
+- Test: `mdPanelHostParameterFirmwareTest` dreht einen Panel-Encoder und
+  verlangt, dass der Track-Parameter genau um die Zahl der Rasten folgt.
+
+**Voraussetzung:** Der MIDI-Ausgang der Maschine für Parameter muss in ihren
+Global-Settings aktiv sein (Standard).
