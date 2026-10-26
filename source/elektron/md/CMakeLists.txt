@@ -14,6 +14,15 @@ if(BUILD_TESTING)
 	add_test(NAME mdShiftPanelLatchTest COMMAND mdShiftPanelLatchTest)
 	set_tests_properties(mdShiftPanelLatchTest PROPERTIES LABELS "UnitTest;Panel")
 	set_property(TARGET mdShiftPanelLatchTest PROPERTY FOLDER "Elektron/test")
+
+	add_executable(mdPanelHostInputTest
+		mdJucePlugin/mdPanelHostInputTest.cpp)
+	find_package(Threads REQUIRED)
+	target_link_libraries(mdPanelHostInputTest PRIVATE mdLib Threads::Threads)
+	target_include_directories(mdPanelHostInputTest PRIVATE mdJucePlugin)
+	add_test(NAME mdPanelHostInputTest COMMAND mdPanelHostInputTest)
+	set_tests_properties(mdPanelHostInputTest PROPERTIES LABELS "UnitTest;Panel" TIMEOUT 30)
+	set_property(TARGET mdPanelHostInputTest PROPERTY FOLDER "Elektron/test")
 endif()
 
 if(${CMAKE_PROJECT_NAME}_BUILD_JUCEPLUGIN)

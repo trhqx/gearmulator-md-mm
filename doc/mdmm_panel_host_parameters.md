@@ -302,3 +302,29 @@ Reihenfolge: Jeder Schritt beginnt mit einem fehlschlagenden Test.
    Klick, MIDI Map auf Note und CC, Momentary-Verhalten, Encoder mit Poti und
    mit Endlos-Encoder, eingeklapptes Device, Projekt speichern und neu laden
    ohne Phantomdrücke.
+
+## Umsetzungsstand
+
+| Schritt | Stand | Tests |
+|---|---|---|
+| `md::PanelGestureMapper` (mdLib) | fertig | `mdPanelGestureMapperTest` |
+| Panel-Parameter in den JSON-Dateien (MD 55, MM 61), aus CC-Automation und Snapshot herausgehalten | fertig | `mdAutomationParameterTest` (Track-Fingerabdruck unverändert) |
+| `PanelHostInput`: lock-freie Übergabe von jedem Thread, Auswertung auf dem Audio-Thread, verlustfreier Endzustand bei Überlauf | fertig | `mdPanelHostInputTest` |
+| Controller-Anbindung: Auswertung pro Block, Zurücksetzen über den Controller-Timer, Reset beim Laden | fertig | `mdPanelHostParameterFirmwareTest` (MD + MM, mit ROM) |
+| Editor: Mausklicks über die Parameter, Anzeige gehaltener Tasten | offen | – |
+| Manuelle Abnahme in Live 12 (AU/VST3) | offen | – |
+
+Erkenntnisse aus der Umsetzung:
+
+- **Uhr:** Die 300-ms-Regeln laufen auf der Maschinenzeit der Emulation
+  (`Hardware::hostCurrentCycle()`, 40 MHz). Sie schreitet mit dem
+  verarbeiteten Audio fort. Ein Offline-Bounce verhält sich deshalb wie
+  Echtzeit, und abgespielte Rücksprünge werden richtig erkannt.
+- **Bereitschaft:** `isFirmwareMidiReady()` wird lange vor der bedienbaren
+  Oberfläche wahr. Während der Startbildschirme (rund 25 s Maschinenzeit)
+  ignoriert die Firmware Tasten. Dort ankommende Drücke sind harmlos,
+  bleiben aber wirkungslos.
+- **Zurücksetzen nur im Timer:** Die Host-Benachrichtigung braucht den
+  Message-Thread. Bei einem Offline-Bounce findet kein Zurücksetzen statt.
+  Das ist unkritisch, weil die Werte dann aus der aufgezeichneten Automation
+  kommen.

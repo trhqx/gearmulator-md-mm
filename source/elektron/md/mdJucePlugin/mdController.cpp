@@ -39,6 +39,7 @@ namespace mdJucePlugin
 		: pluginLib::Controller(_p, _p.getModel() == md::MachineModel::Monomachine
 			? "parameterDescriptions_mm.json" : "parameterDescriptions_md.json")
 		, m_model(_p.getModel())
+		, m_panelInput(_p.getModel())
 	{
 		registerParams(_p, [](const uint8_t _part, const bool _nonPartSensitive)
 		{
@@ -111,6 +112,61 @@ namespace mdJucePlugin
 		// Restored AUTO publications remain dirty and therefore still win when the
 		// correlated Kit dump is applied.
 		requestAutomationState(true);
+		// Panel gestures are never part of a project: a load releases everything.
+		resetPanelParameters();
+	}
+
+	void Controller::resetPanelParameters()
+	{
+		for(const auto& [address, parameters] : getExposedParameters())
+		{
+			if(!md::panelParameters::isPanelPage(address.page))
+				continue;
+			for(auto* const parameter : parameters)
+				parameter->setValueFromSynth(parameter->getDefault(),
+					pluginLib::Parameter::Origin::PresetChange);
+		}
+		m_panelInput.requestReset();
+	}
+
+	void Controller::drainPanelInput()
+	{
+		getProcessor().getPlugin().withDeviceLocked([this](synthLib::Device* const _device)
+		{
+			auto* const device = dynamic_cast<md::Device*>(_device);
+			if(device == nullptr)
+				return;
+			// Gesture timing uses emulated machine time: it advances with processed
+			// audio, so an offline render replays recorded recentres like realtime.
+			const auto& hardware = device->getHardware();
+			const PanelHostInput::DrainContext context{
+				static_cast<double>(hardware.hostCurrentCycle()) * 1000.0 / static_cast<double>(md::g_ucClockHz),
+				hardware.isFirmwareMidiReady(), device->hardwareEpoch()};
+			m_panelInput.drain(context, [this, device](const md::PanelEvent& _event)
+			{
+				if(device->sendPanelEvent(_event.command, _event.argument))
+					m_deliveredPanelEvents.fetch_add(1, std::memory_order_acq_rel);
+			});
+		});
+	}
+
+	void Controller::serviceRecentreRequests()
+	{
+		auto requests = m_panelInput.takeRecentreRequests();
+		for(uint8_t encoder = 0; requests != 0; ++encoder, requests >>= 1)
+		{
+			if((requests & 1) == 0)
+				continue;
+			// Publish the centre so a host in relative mode continues from it. The
+			// echo is recognised as a recentre and moves no encoder; post it directly
+			// as well, since not every host echoes plugin-initiated changes.
+			for(auto* const parameter : findSynthParam(0, md::panelParameters::EncoderPage, encoder))
+				parameter->setUnnormalizedValueNotifyingHost(
+					static_cast<int>(md::PanelGestureMapper::g_encoderCentre),
+					pluginLib::Parameter::Origin::Ui);
+			m_panelInput.post(md::panelParameters::EncoderPage, encoder,
+				md::PanelGestureMapper::g_encoderCentre);
+		}
 	}
 
 	std::vector<uint8_t> Controller::createAutomationSnapshot() const
@@ -362,6 +418,8 @@ namespace mdJucePlugin
 				for(auto* const parameter : parameters)
 					parameter->flushRealtimeValueToUi();
 			}
+			// Host notifications for recentred encoders belong on the message thread.
+			serviceRecentreRequests();
 		}
 		drainRealtimeParameterChanges(RealtimeAutomationCapacity, false);
 		completeSynchronizationIfReady();
@@ -409,7 +467,10 @@ namespace mdJucePlugin
 		const auto& description = _parameter.getDescription();
 		// Panel gestures are delivered to the emulated front panel, never as CCs.
 		if(md::panelParameters::isPanelPage(description.page))
+		{
+			m_panelInput.post(description.page, description.index, static_cast<int>(_value));
 			return;
+		}
 		const md::automation::ParameterChange change{
 			description.page,
 			_parameter.getPart(),
@@ -727,6 +788,7 @@ namespace mdJucePlugin
 	void Controller::processRealtimeParameterChanges(const size_t _maximumChanges)
 	{
 		drainRealtimeParameterChanges(_maximumChanges, true);
+		drainPanelInput();
 	}
 
 	void Controller::applyKitParameters(

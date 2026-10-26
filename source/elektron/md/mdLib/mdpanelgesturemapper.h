@@ -72,6 +72,8 @@ namespace md
 
 		// Release every held button and push switch, emitting one cleared row each.
 		void releaseAll(Output& _output);
+		// Forget all state without emitting events, for a freshly booted machine.
+		void reset();
 
 	private:
 		static constexpr size_t g_controlCount = static_cast<size_t>(PanelControl::ClassicExtended) + 1;

@@ -128,6 +128,14 @@ namespace md
 		m_heldPushes.reset();
 	}
 
+	void PanelGestureMapper::reset()
+	{
+		m_rows.reset();
+		m_heldButtons.reset();
+		m_heldPushes.reset();
+		m_encoders = {};
+	}
+
 	void PanelGestureMapper::append(Output& _output, const PanelEvent _event)
 	{
 		if(_output.count < _output.events.size())

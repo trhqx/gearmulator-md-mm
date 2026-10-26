@@ -253,6 +253,23 @@ namespace
 		idle.releaseAll(empty);
 		expect(empty.count == 0, "releaseAll emitted events with nothing held");
 	}
+
+	void checkResetForgetsEverythingSilently()
+	{
+		const auto model = MachineModel::Machinedrum;
+		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryA);
+		PanelGestureMapper mapper(model);
+		(void)button(mapper, PanelControl::Play, true);
+		(void)push(mapper, PanelEncoder::DataEntryA, true);
+		(void)turn(mapper, PanelEncoder::DataEntryA, 100, 0.0);
+		// A rebooted machine starts with released controls, so reset emits nothing.
+		mapper.reset();
+		expect(button(mapper, PanelControl::Play, false).empty(), "reset left a button held");
+		expect(push(mapper, PanelEncoder::DataEntryA, false).empty(), "reset left a push held");
+		expect(!mapper.recentreTarget(PanelEncoder::DataEntryA, 10000.0), "reset kept encoder history");
+		expect(turn(mapper, PanelEncoder::DataEntryA, 65, 10.0) == std::vector<PanelEvent>{{command, 0x01}},
+			"reset did not return the encoder to the centre");
+	}
 }
 
 int main()
@@ -268,6 +285,7 @@ int main()
 	checkRecentreTarget();
 	checkUnsupportedControlsAreInert();
 	checkReleaseAll();
+	checkResetForgetsEverythingSilently();
 	std::cout << "mdPanelGestureMapperTest passed\n";
 	return 0;
 }

@@ -4,6 +4,7 @@
 #include "mdLib/mdautomation.h"
 #include "mdLib/mdautomationsync.h"
 #include "mdLib/mdtypes.h"
+#include "mdPanelHostInput.h"
 #include "mdRealtimeQueue.h"
 
 #include <atomic>
@@ -54,6 +55,11 @@ namespace mdJucePlugin
 		bool hasAutomationKitSnapshot() const
 		{
 			return m_haveKit.load(std::memory_order_acquire);
+		}
+		// Front-panel host parameters (doc/mdmm_panel_host_parameters.md).
+		uint64_t getDeliveredPanelEventCount() const
+		{
+			return m_deliveredPanelEvents.load(std::memory_order_acquire);
 		}
 		// Host parameters that map to firmware CCs; panel controls are excluded.
 		size_t getAutomationParameterCount() const { return m_automationSlots.size(); }
@@ -156,9 +162,14 @@ namespace mdJucePlugin
 		void onControllerTimer() override;
 		void sendMissingSynchronizationRequests();
 		void sendSynchronizationRequest(const pluginLib::SysEx& _message) const;
+		void drainPanelInput();
+		void serviceRecentreRequests();
+		void resetPanelParameters();
 		static uint64_t milliseconds();
 
 		const md::MachineModel m_model;
+		PanelHostInput m_panelInput;
+		std::atomic<uint64_t> m_deliveredPanelEvents{0};
 		std::atomic<uint8_t> m_baseChannel{0x7f};
 		std::atomic<bool> m_haveGlobal{false};
 		std::atomic<bool> m_haveKit{false};
