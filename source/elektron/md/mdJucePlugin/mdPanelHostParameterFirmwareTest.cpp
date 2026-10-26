@@ -7,6 +7,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -75,6 +76,26 @@ namespace
 			"second host-parameter RECORD press did not toggle the LED back");
 	}
 
+	// Ableton Live toggles a note-mapped on/off parameter on each note-on, so in
+	// tap mode every value change must be exactly one press of the button.
+	void verifyTapMode(Harness& _harness)
+	{
+		auto& controller = _harness.controller;
+		auto& record = panelParameter(controller, "PanelRecord");
+		controller.setHostButtonsTap(true);
+		const auto initial = frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record);
+
+		hostWrite(record, 1);
+		_harness.process(64);
+		require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) != initial,
+			"a toggled-on parameter did not press RECORD in tap mode");
+		hostWrite(record, 0);
+		_harness.process(64);
+		require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) == initial,
+			"a toggled-off parameter did not press RECORD again in tap mode");
+		controller.setHostButtonsTap(false);
+	}
+
 	void verifyEncoder(Harness& _harness)
 	{
 		auto& controller = _harness.controller;
@@ -119,21 +140,43 @@ namespace
 			"release after a state load reached the panel");
 	}
 
+	std::vector<pluginLib::Parameter*> panelParameters(Harness& _harness)
+	{
+		std::vector<pluginLib::Parameter*> result;
+		for(auto* const audioParameter : _harness.audioProcessor.getParameters())
+			if(auto* const parameter = dynamic_cast<pluginLib::Parameter*>(audioParameter))
+				if(md::panelParameters::isPanelPage(parameter->getDescription().page))
+					result.push_back(parameter);
+		return result;
+	}
+
 	bool verifyModel(const md::MachineModel _model)
 	{
 		Harness harness(_model);
 		if(!harness.hasLocalFirmware())
 			return allowMissingFirmware("mdPanelHostParameterFirmwareTest", _model);
 		harness.prepare();
-		require(harness.synchronize(), "initial firmware synchronization timed out ("
+		harness.controller.setHostButtonsTap(false);
+		// auval and other validators set every parameter right after loading.
+		// Held from power-on, panel keys would open the startup menu (test mode,
+		// resets, OS upgrade) and the machine would never boot normally.
+		for(auto* const parameter : panelParameters(harness))
+			hostWrite(*parameter, parameter->getDescription().range.getEnd());
+		require(harness.synchronize(), "the machine did not boot with every panel parameter held ("
 			+ harness.firmwareReadiness() + ")");
+		for(auto* const parameter : panelParameters(harness))
+			hostWrite(*parameter, parameter->getDescription().range.getStart());
+		harness.process(16);
 		// MIDI synchronization completes while the firmware still shows its startup
 		// screens, which ignore panel input. Give the UI the same boot time as the
 		// mdLib panel firmware tests before pressing anything.
 		harness.process(25 * 48000 / BlockSize);
 
 		if(_model == md::MachineModel::Machinedrum)
+		{
 			verifyRecordButton(harness);
+			verifyTapMode(harness);
+		}
 		verifyEncoder(harness);
 		verifyStateLoadReleasesHeldControls(harness);
 

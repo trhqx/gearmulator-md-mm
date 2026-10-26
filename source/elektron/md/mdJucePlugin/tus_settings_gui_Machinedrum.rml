@@ -18,6 +18,13 @@
 	</div>
 	<settingsspacer1/>
 	<label>Works on synthesis parameters, LFO edit, and Master FX. Menus, tabs, empty cells, and other LCD controls remain inert.</label>
+	<settingsspacer1/>
+	<div id="btHostButtonsTap" class="settings-checkboxwithlabel">
+		<button id="button" class="settings-checkbox"/>
+		<label>MIDI-mapped panel buttons tap</label>
+	</div>
+	<settingsspacer1/>
+	<label>On: every change of a panel button parameter is one short press. Use this when mapping notes in Ableton Live, which toggles the parameter on each note. Off: 1 holds the button and 0 releases it, for momentary CC buttons, held trigs and parameter locks. Clicks in the plugin window always behave like the hardware.</label>
 
 	<settingsspacer1/>
 	<h1>RAM Recording</h1>

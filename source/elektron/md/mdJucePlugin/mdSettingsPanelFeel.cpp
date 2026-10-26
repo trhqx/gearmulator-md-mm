@@ -1,5 +1,6 @@
 #include "mdSettingsPanelFeel.h"
 
+#include "mdController.h"
 #include "mdEditor.h"
 #include "mdLcdInteractionModel.h"
 #include "mdPixelPerfectPanel.h"
@@ -28,6 +29,12 @@ namespace mdJucePlugin
 			{
 				m_editor.applyLcdInteraction();
 			}, lcdInteraction::defaultEnabled);
+		jucePluginEditorLib::SettingsPlugin::createToggleButton(_root, "btHostButtonsTap",
+			m_editor.getProcessor().getConfig(), Controller::g_hostButtonsTapConfigKey, [this](const bool _tap)
+			{
+				if(auto* const controller = dynamic_cast<Controller*>(&m_editor.getProcessor().getController()))
+					controller->setHostButtonsTap(_tap);
+			}, Controller::g_hostButtonsTapDefault);
 		bindGroup(_root, "btWheelSpeed", "panelWheelSpeedPercent");
 		bindGroup(_root, "btEncoderSpeed", "panelEncoderSpeedPercent");
 

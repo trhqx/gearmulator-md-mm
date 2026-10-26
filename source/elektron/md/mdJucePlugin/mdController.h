@@ -61,6 +61,10 @@ namespace mdJucePlugin
 		{
 			return m_deliveredPanelEvents.load(std::memory_order_acquire);
 		}
+		// How host-driven panel buttons behave (settings page, persisted per machine).
+		static constexpr const char* g_hostButtonsTapConfigKey = "panelHostButtonsTap";
+		static constexpr bool g_hostButtonsTapDefault = true;
+		void setHostButtonsTap(bool _tap);
 		// Editor input (message thread). Buttons and encoder switches go through the
 		// panel parameters so the mapper owns the scan rows and hosts can learn them.
 		void setPanelControlFromUi(md::panelParameters::Address _address, bool _pressed);

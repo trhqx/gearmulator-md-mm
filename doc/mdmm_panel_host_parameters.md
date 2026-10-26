@@ -47,9 +47,11 @@ die der Host sich ändern sieht.
 
 ### Ergebnisse Live 12 AU (2026-10-26)
 
-- **H1 bestätigt (AU):** Note-On ergibt 1, Note-Off ergibt 0. Die Haltedauer
-  war im Log sichtbar, zwischen 0,3 s und 8 s. Die Taste verhält sich also
-  momentan, P-Locks sind möglich.
+- **H1 widerlegt (AU, korrigiert nach der Abnahme):** Die An/Aus-Paare im Log
+  waren keine Haltedauern, sondern zwei getrennte Anschläge. Live **schaltet**
+  einen auf eine Note gemappten An/Aus-Parameter bei jedem Note-On um und
+  ignoriert Note-Off. Gemeldet wurde das in der Live-Abnahme („die Trigs
+  scheinen Toggles zu sein"). Lösung: siehe „Tastenmodus".
 - **H2:** Live bewegt pro relativem Tick um **1/127 des normalisierten
   Bereichs**, unabhängig von der Stufenzahl des Parameters (16k-Parameter: 129
   Stufen pro Tick). Bei schnellem Drehen kommen Sprünge von 2–5 Ticks pro
@@ -323,10 +325,22 @@ Erkenntnisse aus der Umsetzung:
   Echtzeit, und abgespielte Rücksprünge werden richtig erkannt.
 - **Bereitschaft:** `isFirmwareMidiReady()` wird lange vor der bedienbaren
   Oberfläche wahr. Während der Startbildschirme (rund 25 s Maschinenzeit)
-  ignoriert die Firmware die meisten Tasten. Panel-Eingaben werden trotzdem
-  jederzeit zugestellt, wie es die Hardware-Emulation schon für Mausklicks
-  tat. Beim Einschalten gehaltene Tasten bleiben so möglich. Nur das
-  Zurücksetzen der Encoder wartet auf die Bereitschaft.
+  ignoriert die Firmware die meisten Tasten.
+- **Startup-Menü (gefunden mit `auval`):** Tasten, die beim Booten gehalten
+  werden, öffnen das Early-Startup-Menü des MD. Es bietet Test-Modus, Empty
+  bzw. Factory Reset und OS-Upgrade. `auval` setzt nach dem Laden alle
+  Parameter. Ungeschützt landete die Maschine dadurch im Startup-Menü, ein
+  DSP hielt an („INVALID PC ff0000"), und `auval` hing im Render-Test.
+  Ein Host könnte auf diesem Weg sogar einen Reset auslösen. Deshalb gilt:
+  - **Host-Eingaben** (Automation, MIDI Map, Validatoren) werden bis
+    `isFirmwareMidiReady()` zurückgehalten. Im Startup-Menü wird diese
+    Bereitschaft nie erreicht. Encoder übernehmen in dieser Zeit nur ihre
+    Position.
+  - **Editor-Eingaben** werden jederzeit zugestellt, wie auf der Hardware.
+    Eine absichtlich beim Start gehaltene Taste funktioniert weiter.
+  - Regressionstest: `mdPanelHostParameterFirmwareTest` setzt beim Laden
+    alle Panel-Parameter auf Maximum und verlangt einen normalen Boot.
+    `auval` besteht jetzt für MD und MM.
 - **Editor-Drehungen:** Der Editor schickt seine Encoder-Schritte weiter
   selbst, ohne Begrenzung durch den Wertebereich. Den Host-Parameter bewegt
   er nur mit (`Delivery::AlreadyDelivered`), damit Configure ihn lernt.
@@ -341,3 +355,22 @@ Erkenntnisse aus der Umsetzung:
 - **Bridge / Remote-Device:** Ohne lokales `md::Device` verwirft der
   Controller Panel-Eingaben. Über die Bridge haben die Panel-Parameter
   derzeit keine Wirkung.
+
+## Tastenmodus für Host-Eingaben
+
+Einstellung auf der Settings-Seite „MIDI-mapped panel buttons tap"
+(Config-Schlüssel `panelHostButtonsTap`, pro Maschine, Voreinstellung **an**):
+
+- **Antippen (an):** Jede Änderung eines Tasten-Parameters ist ein kurzer
+  Druck. Das Loslassen folgt nach 40 ms Maschinenzeit, damit der Panel-Scan
+  der Firmware den Druck sieht. Kommt innerhalb dieser Zeit eine weitere
+  Änderung, wird sie geschluckt. Passt zu Noten-Mappings in Live. Gehaltene
+  Tasten und P-Locks sind so nicht möglich.
+- **Momentan (aus):** 1 hält die Taste, 0 lässt sie los. Passt zu CC-Buttons
+  im Momentary-Modus, zu gehaltenen Trigs und P-Locks.
+- Klicks im Plugin-Fenster verhalten sich immer wie die Hardware. Echos des
+  Hosts auf Editor-Klicks gelten als Duplikat und lösen keinen Tap aus.
+- Einschränkung: Eine im Momentan-Stil aufgenommene Automation (1 … 0)
+  ergibt im Antippen-Modus zwei Drücke.
+- Tests: `mdPanelHostInputTest` (Tap-Fälle), `mdPanelHostParameterFirmwareTest`
+  (RECORD-LED schaltet bei 0→1 und bei 1→0 je einmal um).

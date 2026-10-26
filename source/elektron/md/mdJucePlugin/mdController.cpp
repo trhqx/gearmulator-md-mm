@@ -41,6 +41,7 @@ namespace mdJucePlugin
 		, m_model(_p.getModel())
 		, m_panelInput(_p.getModel())
 	{
+		setHostButtonsTap(_p.getConfig().getBoolValue(g_hostButtonsTapConfigKey, g_hostButtonsTapDefault));
 		registerParams(_p, [](const uint8_t _part, const bool _nonPartSensitive)
 		{
 			// The only global parameters are the front-panel controls.
@@ -129,12 +130,19 @@ namespace mdJucePlugin
 		m_panelInput.requestReset();
 	}
 
+	void Controller::setHostButtonsTap(const bool _tap)
+	{
+		m_panelInput.setHostButtonMode(_tap ? PanelHostInput::ButtonMode::Tap
+			: PanelHostInput::ButtonMode::Momentary);
+	}
+
 	void Controller::setPanelControlFromUi(const md::panelParameters::Address _address, const bool _pressed)
 	{
 		const auto value = _pressed ? 1 : 0;
 		// Post first so the edge is ordered before any later change, even if the
 		// parameter's own (asynchronous) value notification coalesces press and release.
-		m_panelInput.post(_address.page, _address.index, value);
+		m_panelInput.post(_address.page, _address.index, value, PanelHostInput::Delivery::Mapped,
+			PanelHostInput::Source::Editor);
 		for(auto* const parameter : findSynthParam(0, _address.page, _address.index))
 			parameter->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
 	}
@@ -151,7 +159,7 @@ namespace mdJucePlugin
 		if(next == current)
 			return;
 		m_panelInput.post(md::panelParameters::EncoderPage, index, next,
-			PanelHostInput::Delivery::AlreadyDelivered);
+			PanelHostInput::Delivery::AlreadyDelivered, PanelHostInput::Source::Editor);
 		for(auto* const parameter : parameters)
 			parameter->setUnnormalizedValueNotifyingHost(next, pluginLib::Parameter::Origin::Ui);
 	}

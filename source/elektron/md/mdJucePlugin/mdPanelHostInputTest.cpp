@@ -84,21 +84,46 @@ namespace
 		expect(!input.post(pp::ButtonPage, 200, 1), "out-of-range button accepted");
 	}
 
-	void checkInputBeforeFirmwareReadinessIsDelivered()
+	void checkHostInputBeforeFirmwareReadinessIsWithheld()
 	{
-		// The emulated panel UART accepts input during boot, as the hardware does
-		// (e.g. keys held at power-on). Only recentring waits for readiness.
+		// Keys held while the machine boots open its startup menu (test mode,
+		// resets, OS upgrade). A host - or a validator setting every parameter -
+		// must never get there, so host input waits for the firmware.
 		const auto model = MachineModel::Machinedrum;
 		PanelHostInput input(model);
 		Machine machine;
 		machine.ready = false;
-		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
-		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
-			"a press during boot did not reach the panel");
+		input.post(pp::ButtonPage, button(PanelControl::Record), 1);
+		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 70);
+		expect(drain(input, machine).empty(), "host input reached a booting machine");
+
 		machine.ready = true;
-		input.post(pp::ButtonPage, button(PanelControl::Function), 0);
+		input.post(pp::ButtonPage, button(PanelControl::Record), 0);
+		expect(drain(input, machine).empty(), "release of a withheld press reached the panel");
+		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 71);
+		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryA);
+		expect(drain(input, machine) == std::vector<PanelEvent>{{command, 0x01}},
+			"encoder moved while booting was not adopted as the new base");
+	}
+
+	void checkEditorInputBeforeFirmwareReadinessIsDelivered()
+	{
+		// A user holding a key in the editor during boot means it, as on hardware.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		machine.ready = false;
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, PanelHostInput::Delivery::Mapped,
+			PanelHostInput::Source::Editor);
+		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
+			"an editor press during boot did not reach the panel");
+		// The parameter's own notification echoes the value as host input.
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
+		expect(drain(input, machine).empty(), "host echo of an editor press produced events");
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, PanelHostInput::Delivery::Mapped,
+			PanelHostInput::Source::Editor);
 		const auto release = drain(input, machine);
-		expect(release.size() == 1 && release[0].argument == 0, "release after boot was lost");
+		expect(release.size() == 1 && release[0].argument == 0, "editor release during boot was lost");
 	}
 
 	void checkMissingDeviceDiscardsInput()
@@ -131,6 +156,88 @@ namespace
 		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryE);
 		expect(drain(input, machine) == std::vector<PanelEvent>{{command, 0x01}},
 			"a later host turn did not continue from the editor position");
+	}
+
+	// Ableton Live toggles a note-mapped on/off parameter on every note-on and
+	// ignores note-off. In tap mode every host value change is one short press.
+	void checkTapModeTurnsToggledValuesIntoPresses()
+	{
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
+		Machine machine;
+		const auto press = pressOf(model, PanelControl::Trigger1);
+		const PanelEvent release{press.command, 0};
+		constexpr double hold = PanelHostInput::g_tapMilliseconds;
+
+		input.post(pp::ButtonPage, button(PanelControl::Trigger1), 1);
+		expect(drain(input, machine) == std::vector<PanelEvent>{press}, "first toggle did not press");
+		machine.now += hold - 1;
+		expect(drain(input, machine).empty(), "tap released before the firmware could scan it");
+		machine.now += 1;
+		expect(drain(input, machine) == std::vector<PanelEvent>{release}, "tap was not released");
+
+		// The next note-on toggles the value back to 0: that is another press.
+		machine.now += 100;
+		input.post(pp::ButtonPage, button(PanelControl::Trigger1), 0);
+		expect(drain(input, machine) == std::vector<PanelEvent>{press}, "toggle back to 0 did not press");
+		input.post(pp::ButtonPage, button(PanelControl::Trigger1), 0);
+		machine.now += hold;
+		expect(drain(input, machine) == std::vector<PanelEvent>{release},
+			"duplicate delivery of a toggle produced a second press");
+	}
+
+	void checkTapModeKeepsEditorMomentary()
+	{
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
+		Machine machine;
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, PanelHostInput::Delivery::Mapped,
+			PanelHostInput::Source::Editor);
+		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
+			"editor press in tap mode");
+		// The host echoes the editor's own notification back as host input.
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
+		machine.now += 10 * PanelHostInput::g_tapMilliseconds;
+		expect(drain(input, machine).empty(), "an editor hold was released by the tap timer");
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, PanelHostInput::Delivery::Mapped,
+			PanelHostInput::Source::Editor);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0);
+		const auto released = drain(input, machine);
+		expect(released.size() == 1 && released[0].argument == 0,
+			"the host echo of an editor release was taken as a tap");
+	}
+
+	void checkTapModeAppliesToEncoderPushes()
+	{
+		const auto model = MachineModel::Monomachine;
+		PanelHostInput input(model);
+		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
+		Machine machine;
+		const auto packet = *md::panelEncoderPressPacket(model, PanelEncoder::DataEntryC);
+		input.post(pp::EncoderPushPage, encoder(PanelEncoder::DataEntryC), 1);
+		expect(drain(input, machine) == std::vector<PanelEvent>{{packet.row, packet.mask}}, "push tap press");
+		machine.now += PanelHostInput::g_tapMilliseconds;
+		const auto released = drain(input, machine);
+		expect(released.size() == 1 && released[0].argument == 0, "push tap was not released");
+	}
+
+	void checkTapModeIgnoresTogglesWhileBooting()
+	{
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
+		Machine machine;
+		machine.ready = false;
+		input.post(pp::ButtonPage, button(PanelControl::Play), 1);
+		expect(drain(input, machine).empty(), "a toggle during boot pressed a key");
+		machine.ready = true;
+		machine.now += 1000;
+		expect(drain(input, machine).empty(), "a withheld toggle was delivered later");
+		input.post(pp::ButtonPage, button(PanelControl::Play), 0);
+		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Play)},
+			"the first toggle after boot did not press");
 	}
 
 	void checkRebootForgetsHeldControls()
@@ -243,9 +350,14 @@ int main()
 	checkButtonsReachTheMapper();
 	checkDuplicateDeliveryIsIgnored();
 	checkRejectsForeignAddresses();
-	checkInputBeforeFirmwareReadinessIsDelivered();
+	checkHostInputBeforeFirmwareReadinessIsWithheld();
+	checkEditorInputBeforeFirmwareReadinessIsDelivered();
 	checkMissingDeviceDiscardsInput();
 	checkEditorTurnsOnlyMoveTheBase();
+	checkTapModeTurnsToggledValuesIntoPresses();
+	checkTapModeKeepsEditorMomentary();
+	checkTapModeAppliesToEncoderPushes();
+	checkTapModeIgnoresTogglesWhileBooting();
 	checkRebootForgetsHeldControls();
 	checkResetReleasesHeldControls();
 	checkRecentreRequests();
