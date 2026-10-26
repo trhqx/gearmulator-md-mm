@@ -1,4 +1,5 @@
 #include "mdLib/mdpanelgesturemapper.h"
+#include "mdLib/mdpanelparameters.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -190,6 +191,42 @@ namespace
 			"delta was not measured from the rebased position");
 	}
 
+	void checkAdoptedPositionCountsAsMovement()
+	{
+		PanelGestureMapper mapper(MachineModel::Machinedrum);
+		constexpr auto encoder = PanelEncoder::DataEntryF;
+		mapper.adoptEncoderPosition(encoder, 110, 0.0);
+		expect(!mapper.recentreTarget(encoder, g_idle / 2), "adopted position recentred too early");
+		expect(mapper.recentreTarget(encoder, g_idle).has_value(), "adopted position was never recentred");
+		expect(turn(mapper, encoder, PanelGestureMapper::g_encoderCentre, g_idle).empty(),
+			"recentre after an adopted position emitted ticks");
+	}
+
+	void checkParameterAddressForPacket()
+	{
+		namespace pp = md::panelParameters;
+		for(const auto model : {MachineModel::Machinedrum, MachineModel::Monomachine})
+		{
+			for(uint8_t c = 0; c <= static_cast<uint8_t>(PanelControl::ClassicExtended); ++c)
+			{
+				const auto packet = md::panelPacket(model, static_cast<PanelControl>(c));
+				if(!packet)
+					continue;
+				const auto address = pp::addressForPacket(model, *packet);
+				expect(address && address->page == pp::ButtonPage && address->index == c,
+					"button packet did not map back to its parameter");
+			}
+			for(uint8_t e = 0; e <= static_cast<uint8_t>(PanelEncoder::DataEntryH); ++e)
+			{
+				const auto packet = *md::panelEncoderPressPacket(model, static_cast<PanelEncoder>(e));
+				const auto address = pp::addressForPacket(model, packet);
+				expect(address && address->page == pp::EncoderPushPage && address->index == e,
+					"encoder push packet did not map back to its parameter");
+			}
+			expect(!pp::addressForPacket(model, {0x20, 0x03}), "a multi-bit packet mapped to one control");
+		}
+	}
+
 	void checkRecentreTarget()
 	{
 		PanelGestureMapper mapper(MachineModel::Machinedrum);
@@ -283,6 +320,8 @@ int main()
 	checkRealMovesOntoCentreAreKept();
 	checkRebase();
 	checkRecentreTarget();
+	checkParameterAddressForPacket();
+	checkAdoptedPositionCountsAsMovement();
 	checkUnsupportedControlsAreInert();
 	checkReleaseAll();
 	checkResetForgetsEverythingSilently();

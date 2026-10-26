@@ -84,23 +84,53 @@ namespace
 		expect(!input.post(pp::ButtonPage, 200, 1), "out-of-range button accepted");
 	}
 
-	void checkInputBeforeFirmwareReadiness()
+	void checkInputBeforeFirmwareReadinessIsDelivered()
 	{
+		// The emulated panel UART accepts input during boot, as the hardware does
+		// (e.g. keys held at power-on). Only recentring waits for readiness.
 		const auto model = MachineModel::Machinedrum;
 		PanelHostInput input(model);
 		Machine machine;
 		machine.ready = false;
-		input.post(pp::ButtonPage, button(PanelControl::Record), 1);
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 70);
-		expect(drain(input, machine).empty(), "input reached a firmware that is not ready");
-
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
+		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
+			"a press during boot did not reach the panel");
 		machine.ready = true;
-		input.post(pp::ButtonPage, button(PanelControl::Record), 0);
-		expect(drain(input, machine).empty(), "release of a never-delivered press reached the panel");
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 71);
-		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryA);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0);
+		const auto release = drain(input, machine);
+		expect(release.size() == 1 && release[0].argument == 0, "release after boot was lost");
+	}
+
+	void checkMissingDeviceDiscardsInput()
+	{
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		machine.epoch = 0;	// no local device
+		input.post(pp::ButtonPage, button(PanelControl::Play), 1);
+		input.discard();
+		machine.epoch = 1;
+		input.post(pp::ButtonPage, button(PanelControl::Play), 0);
+		expect(drain(input, machine).empty(), "input without a device reached a later device");
+	}
+
+	void checkEditorTurnsOnlyMoveTheBase()
+	{
+		// The editor sends its encoder ticks itself and moves the host parameter
+		// only so a host can learn it; the mapper must not send those ticks again.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		const auto knob = encoder(PanelEncoder::DataEntryE);
+		expect(input.post(pp::EncoderPage, knob, 70, PanelHostInput::Delivery::AlreadyDelivered),
+			"editor encoder post rejected");
+		expect(drain(input, machine).empty(), "editor-delivered ticks were sent again");
+		input.post(pp::EncoderPage, knob, 70);
+		expect(drain(input, machine).empty(), "host echo of the editor value produced ticks");
+		input.post(pp::EncoderPage, knob, 71);
+		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryE);
 		expect(drain(input, machine) == std::vector<PanelEvent>{{command, 0x01}},
-			"encoder moved while not ready was not adopted as the new base");
+			"a later host turn did not continue from the editor position");
 	}
 
 	void checkRebootForgetsHeldControls()
@@ -213,7 +243,9 @@ int main()
 	checkButtonsReachTheMapper();
 	checkDuplicateDeliveryIsIgnored();
 	checkRejectsForeignAddresses();
-	checkInputBeforeFirmwareReadiness();
+	checkInputBeforeFirmwareReadinessIsDelivered();
+	checkMissingDeviceDiscardsInput();
+	checkEditorTurnsOnlyMoveTheBase();
 	checkRebootForgetsHeldControls();
 	checkResetReleasesHeldControls();
 	checkRecentreRequests();

@@ -102,6 +102,21 @@ namespace md
 		m_encoders[index].position = std::min(_position, g_encoderMaximum);
 	}
 
+	void PanelGestureMapper::adoptEncoderPosition(const PanelEncoder _encoder, const uint8_t _position,
+		const double _nowMilliseconds)
+	{
+		const auto index = static_cast<size_t>(_encoder);
+		if(index >= g_encoderCount)
+			return;
+		auto& state = m_encoders[index];
+		const auto position = std::min(_position, g_encoderMaximum);
+		if(position == state.position)
+			return;
+		state.position = position;
+		state.touched = true;
+		state.lastChangeMilliseconds = _nowMilliseconds;
+	}
+
 	std::optional<uint8_t> PanelGestureMapper::recentreTarget(const PanelEncoder _encoder,
 		const double _nowMilliseconds) const
 	{

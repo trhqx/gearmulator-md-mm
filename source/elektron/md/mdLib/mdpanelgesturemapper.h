@@ -68,6 +68,9 @@ namespace md
 
 		// Adopt a position without emitting ticks, e.g. after a state restore.
 		void rebaseEncoder(PanelEncoder _encoder, uint8_t _position);
+		// Adopt a position whose ticks were already delivered elsewhere (the editor),
+		// counting it as movement for the recentre timing.
+		void adoptEncoderPosition(PanelEncoder _encoder, uint8_t _position, double _nowMilliseconds);
 		std::optional<uint8_t> recentreTarget(PanelEncoder _encoder, double _nowMilliseconds) const;
 
 		// Release every held button and push switch, emitting one cleared row each.

@@ -29,10 +29,16 @@ namespace mdJucePlugin
 	public:
 		static constexpr size_t g_queueCapacity = 256;
 
+		enum class Delivery : uint8_t
+		{
+			Mapped,				// the mapper turns the change into panel events
+			AlreadyDelivered	// the editor sent the ticks itself; only move the base
+		};
+
 		struct DrainContext
 		{
 			double nowMilliseconds = 0.0;	// audio-sample clock, see Controller
-			bool firmwareReady = false;
+			bool firmwareReady = false;		// gates recentring only; input is always delivered
 			uint64_t hardwareEpoch = 0;
 		};
 
@@ -41,7 +47,8 @@ namespace mdJucePlugin
 		}
 
 		// Any thread. False if the address is not a panel control of this model.
-		bool post(const uint8_t _page, const uint8_t _index, const int _value)
+		bool post(const uint8_t _page, const uint8_t _index, const int _value,
+			const Delivery _delivery = Delivery::Mapped)
 		{
 			const auto slot = slotFor(_page, _index);
 			if(!slot)
@@ -49,8 +56,11 @@ namespace mdJucePlugin
 			const auto value = static_cast<uint8_t>(std::clamp(_value, 0,
 				static_cast<int>(md::PanelGestureMapper::g_encoderMaximum)));
 			m_latest[*slot].store(value, std::memory_order_release);
-			if(!m_queue.tryPush({*slot, value}))
-				m_dirty[*slot / 64].fetch_or(uint64_t{1} << (*slot % 64), std::memory_order_acq_rel);
+			if(!m_queue.tryPush({*slot, value, _delivery}))
+			{
+				auto& dirty = _delivery == Delivery::Mapped ? m_dirty : m_adoptDirty;
+				dirty[*slot / 64].fetch_or(uint64_t{1} << (*slot % 64), std::memory_order_acq_rel);
+			}
 			return true;
 		}
 
@@ -68,6 +78,22 @@ namespace mdJucePlugin
 			return m_recentreRequests.exchange(0, std::memory_order_acq_rel);
 		}
 
+		// Audio thread only. Drops everything queued, e.g. while no local device
+		// exists, so stale input cannot reach a machine created later.
+		void discard()
+		{
+			Entry entry;
+			for(size_t i = 0; i < g_queueCapacity && m_queue.tryPop(entry); ++i)
+			{
+			}
+			for(auto& word : m_dirty)
+				word.store(0, std::memory_order_release);
+			for(auto& word : m_adoptDirty)
+				word.store(0, std::memory_order_release);
+			m_mapper.reset();
+			m_recentrePending = 0;
+		}
+
 		// Audio thread only. Calls _sink(const md::PanelEvent&) for each event.
 		template<typename Sink>
 		void drain(const DrainContext& _context, Sink&& _sink)
@@ -75,9 +101,8 @@ namespace mdJucePlugin
 			Output output;
 			auto flush = [&]()
 			{
-				if(_context.firmwareReady)
-					for(size_t i = 0; i < output.count; ++i)
-						_sink(output.events[i]);
+				for(size_t i = 0; i < output.count; ++i)
+					_sink(output.events[i]);
 				output.count = 0;
 			};
 
@@ -99,8 +124,23 @@ namespace mdJucePlugin
 			Entry entry;
 			for(size_t i = 0; i < g_queueCapacity && m_queue.tryPop(entry); ++i)
 			{
-				apply(entry.slot, entry.value, _context, output);
+				apply(entry.slot, entry.value, entry.delivery, _context, output);
 				flush();
+			}
+			for(size_t word = 0; word < m_adoptDirty.size(); ++word)
+			{
+				// The latest value already includes any later mapped change of the
+				// same control, so adopting it settles both kinds of overflow.
+				auto bits = m_adoptDirty[word].exchange(0, std::memory_order_acq_rel);
+				m_dirty[word].fetch_and(~bits, std::memory_order_acq_rel);
+				while(bits != 0)
+				{
+					const auto bit = static_cast<size_t>(countTrailingZeros(bits));
+					bits &= bits - 1;
+					const auto slot = static_cast<uint8_t>(word * 64 + bit);
+					apply(slot, m_latest[slot].load(std::memory_order_acquire), Delivery::AlreadyDelivered,
+						_context, output);
+				}
 			}
 			for(size_t word = 0; word < m_dirty.size(); ++word)
 			{
@@ -110,7 +150,7 @@ namespace mdJucePlugin
 					const auto bit = static_cast<size_t>(countTrailingZeros(bits));
 					bits &= bits - 1;
 					const auto slot = static_cast<uint8_t>(word * 64 + bit);
-					apply(slot, m_latest[slot].load(std::memory_order_acquire), _context, output);
+					apply(slot, m_latest[slot].load(std::memory_order_acquire), Delivery::Mapped, _context, output);
 					flush();
 				}
 			}
@@ -136,6 +176,7 @@ namespace mdJucePlugin
 		{
 			uint8_t slot = 0;
 			uint8_t value = 0;
+			Delivery delivery = Delivery::Mapped;
 		};
 
 		static constexpr uint8_t g_buttonCount = static_cast<uint8_t>(md::PanelControl::ClassicExtended) + 1;
@@ -172,34 +213,32 @@ namespace mdJucePlugin
 			return std::nullopt;
 		}
 
-		void apply(const uint8_t _slot, const uint8_t _value, const DrainContext& _context, Output& _output)
+		void apply(const uint8_t _slot, const uint8_t _value, const Delivery _delivery,
+			const DrainContext& _context, Output& _output)
 		{
 			if(_slot >= g_firstPushSlot)
 			{
-				// Never deliver a press the firmware cannot see: its release would
-				// then be the only edge the machine receives.
-				if(_context.firmwareReady)
-					m_mapper.setEncoderPush(static_cast<md::PanelEncoder>(_slot - g_firstPushSlot), _value != 0, _output);
+				m_mapper.setEncoderPush(static_cast<md::PanelEncoder>(_slot - g_firstPushSlot), _value != 0, _output);
 				return;
 			}
 			if(_slot >= g_firstEncoderSlot)
 			{
 				const auto encoder = static_cast<md::PanelEncoder>(_slot - g_firstEncoderSlot);
 				m_recentrePending &= ~(1u << (_slot - g_firstEncoderSlot));
-				if(_context.firmwareReady)
-					m_mapper.setEncoderPosition(encoder, _value, _context.nowMilliseconds, _output);
+				if(_delivery == Delivery::AlreadyDelivered)
+					m_mapper.adoptEncoderPosition(encoder, _value, _context.nowMilliseconds);
 				else
-					m_mapper.rebaseEncoder(encoder, _value);
+					m_mapper.setEncoderPosition(encoder, _value, _context.nowMilliseconds, _output);
 				return;
 			}
-			if(_context.firmwareReady)
-				m_mapper.setButton(static_cast<md::PanelControl>(_slot), _value != 0, _output);
+			m_mapper.setButton(static_cast<md::PanelControl>(_slot), _value != 0, _output);
 		}
 
 		const md::MachineModel m_model;
 		RealtimeQueue<Entry, g_queueCapacity> m_queue;
 		std::array<std::atomic<uint8_t>, g_slotCount> m_latest{};
 		std::array<std::atomic<uint64_t>, (g_slotCount + 63) / 64> m_dirty{};
+		std::array<std::atomic<uint64_t>, (g_slotCount + 63) / 64> m_adoptDirty{};
 		std::atomic<bool> m_resetRequested{false};
 		std::atomic<uint32_t> m_recentreRequests{0};
 
