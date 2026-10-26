@@ -353,3 +353,31 @@ if(BUILD_TESTING)
 		TIMEOUT 600)
 	set_property(TARGET mdProjectStateRestoreTest PROPERTY FOLDER "Elektron/test")
 endif()
+
+# Manual DAW probe for doc/mdmm_panel_host_parameters.md. It is installed into the
+# user's plug-in folders so it can be loaded in a host; never part of a release.
+option(${CMAKE_PROJECT_NAME}_BUILD_MDMM_HOST_PROBE "Build the MD/MM host-parameter probe plug-in" OFF)
+if(${CMAKE_PROJECT_NAME}_BUILD_MDMM_HOST_PROBE)
+	set(hostProbeFormats VST3)
+	if(APPLE)
+		list(APPEND hostProbeFormats AU)
+	endif()
+	juce_add_plugin(mdHostParameterProbePlugin
+		PRODUCTS_FOLDER "${CMAKE_BINARY_DIR}/test-products/$<CONFIG>"
+		COMPANY_NAME "Gearmulator"
+		IS_SYNTH TRUE
+		NEEDS_MIDI_INPUT TRUE
+		NEEDS_MIDI_OUTPUT FALSE
+		IS_MIDI_EFFECT FALSE
+		COPY_PLUGIN_AFTER_BUILD TRUE
+		PLUGIN_MANUFACTURER_CODE GmPv
+		PLUGIN_CODE Thpp
+		FORMATS ${hostProbeFormats}
+		PRODUCT_NAME "Gearmulator Host Probe")
+	target_sources(mdHostParameterProbePlugin PRIVATE mdHostParameterProbePlugin.cpp)
+	removeJuceDependencies(mdHostParameterProbePlugin)
+	target_link_libraries(mdHostParameterProbePlugin PRIVATE juce_plugin_modules)
+	target_compile_definitions(mdHostParameterProbePlugin PUBLIC
+		JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1)
+	set_property(TARGET mdHostParameterProbePlugin PROPERTY FOLDER "Elektron/test")
+endif()
