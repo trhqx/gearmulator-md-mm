@@ -9,6 +9,7 @@
 #include "juceRmlUi/rmlInterfaces.h"
 
 #include "RmlUi/Core/Context.h"
+#include "RmlUi/Core/ElementDocument.h"
 
 #include "mdLib/mdpanel.h"
 #include "synthLib/realtimeInstrumentation.h"
@@ -20,6 +21,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace mdJucePlugin
 {
@@ -217,6 +219,69 @@ namespace
 		while(_instrumentation.popTimelineEvent(event))
 			require(event.kind != synthLib::RealtimeEventKind::PanelInput,
 				_label + ": inactive LCD cell emitted panel input");
+	}
+
+	// Records what a host sees: value changes and begin/end gestures. Live's
+	// Configure learns a parameter from exactly these notifications.
+	struct HostParameterRecorder final : juce::AudioProcessorParameter::Listener
+	{
+		void parameterValueChanged(int, const float _value) override { values.push_back(_value); }
+		void parameterGestureChanged(int, const bool _starting) override { (_starting ? begins : ends)++; }
+		std::vector<float> values;
+		int begins = 0;
+		int ends = 0;
+	};
+
+	void verifyHostParameterGestures(mdJucePlugin::AudioPluginAudioProcessor& _processor,
+		mdJucePlugin::Editor& _editor, Rml::Context& _context, juceRmlUi::ElemCanvas& _canvas,
+		const md::MachineModel _model)
+	{
+		using namespace mdJucePlugin::lcdInteraction;
+		auto& controller = _processor.getController();
+
+		auto* const play = controller.getParameter("PanelPlay", 0);
+		require(play != nullptr, "Panel Play parameter is missing");
+		HostParameterRecorder playRecorder;
+		play->addListener(&playRecorder);
+		auto* const document = _context.GetDocument(0);
+		require(document != nullptr, "editor has no document");
+		auto* const button = document->GetElementById("btPlay");
+		require(button != nullptr, "editor has no Play button");
+		const auto offset = button->GetAbsoluteOffset(Rml::BoxArea::Border);
+		const auto size = button->GetBox().GetSize(Rml::BoxArea::Border);
+		const auto x = static_cast<int>(offset.x + size.x / 2);
+		const auto y = static_cast<int>(offset.y + size.y / 2);
+		_context.ProcessMouseMove(x, y, 0);
+		_context.ProcessMouseButtonDown(0, 0);
+		require(play->getValue() == 1.0f, "clicking Play did not press its host parameter");
+		_context.ProcessMouseButtonUp(0, 0);
+		play->removeListener(&playRecorder);
+		require(play->getValue() == 0.0f, "releasing Play did not release its host parameter");
+		require(playRecorder.values == std::vector<float>{1.0f, 0.0f},
+			"Play click did not notify the host of press and release");
+		require(playRecorder.begins >= 1 && playRecorder.begins == playRecorder.ends,
+			"Play click did not report a complete host gesture");
+
+		auto* const encoder = controller.getParameter("PanelEncoderDataEntryA", 0);
+		require(encoder != nullptr, "Panel Encoder A parameter is missing");
+		// Earlier drags in this test saturated the parameter; without a running
+		// machine nothing recentres it, so start from the centre explicitly.
+		encoder->setUnnormalizedValueNotifyingHost(64, pluginLib::Parameter::Origin::Ui);
+		const auto before = encoder->getUnnormalizedValue();
+		HostParameterRecorder encoderRecorder;
+		encoder->addListener(&encoderRecorder);
+		mdJucePlugin::EditorIdentityTestAccess::publishPanel(_editor, makeStandardPanel(_model));
+		const auto point = encoderCenter(_canvas, LayoutKind::Standard, 0);
+		_context.ProcessMouseMove(point.x, point.y, 0);
+		_context.ProcessMouseButtonDown(0, 0);
+		_context.ProcessMouseMove(point.x + 30, point.y, 0);
+		_context.ProcessMouseButtonUp(0, 0);
+		encoder->removeListener(&encoderRecorder);
+		require(encoder->getUnnormalizedValue() > before,
+			"turning DATA ENTRY A in the editor did not move its host parameter");
+		require(!encoderRecorder.values.empty() && encoderRecorder.begins >= 1
+			&& encoderRecorder.begins == encoderRecorder.ends,
+			"editor encoder turn did not notify the host with a gesture");
 	}
 
 	void exerciseCells(mdJucePlugin::Editor& _editor, Rml::Context& _context,
@@ -612,6 +677,8 @@ int main()
 				"absolute painted A/B boundary drag") != 0,
 				"painted boundary drag did not emit its displayed encoder");
 		}
+
+		verifyHostParameterGestures(processor, *editor, context, canvas, model);
 
 		std::printf("%s LcdEditorPointerTest: PASS\n", product);
 		return 0;

@@ -311,7 +311,8 @@ Reihenfolge: Jeder Schritt beginnt mit einem fehlschlagenden Test.
 | Panel-Parameter in den JSON-Dateien (MD 55, MM 61), aus CC-Automation und Snapshot herausgehalten | fertig | `mdAutomationParameterTest` (Track-Fingerabdruck unverändert) |
 | `PanelHostInput`: lock-freie Übergabe von jedem Thread, Auswertung auf dem Audio-Thread, verlustfreier Endzustand bei Überlauf | fertig | `mdPanelHostInputTest` |
 | Controller-Anbindung: Auswertung pro Block, Zurücksetzen über den Controller-Timer, Reset beim Laden | fertig | `mdPanelHostParameterFirmwareTest` (MD + MM, mit ROM) |
-| Editor: Mausklicks über die Parameter, Anzeige gehaltener Tasten | offen | – |
+| Editor: Tasten und Encoder-Push über die Parameter (Mapper als einziger Besitzer der Scan-Zeilen), Encoder-Drehungen bewegen den Host-Parameter mit | fertig | `md/mmLcdEditorPointerTest` (Geste + Wert beim Klick und beim Drehen) |
+| Editor: Anzeige von per MIDI gehaltenen Tasten | offen | – |
 | Manuelle Abnahme in Live 12 (AU/VST3) | offen | – |
 
 Erkenntnisse aus der Umsetzung:
@@ -322,9 +323,21 @@ Erkenntnisse aus der Umsetzung:
   Echtzeit, und abgespielte Rücksprünge werden richtig erkannt.
 - **Bereitschaft:** `isFirmwareMidiReady()` wird lange vor der bedienbaren
   Oberfläche wahr. Während der Startbildschirme (rund 25 s Maschinenzeit)
-  ignoriert die Firmware Tasten. Dort ankommende Drücke sind harmlos,
-  bleiben aber wirkungslos.
+  ignoriert die Firmware die meisten Tasten. Panel-Eingaben werden trotzdem
+  jederzeit zugestellt, wie es die Hardware-Emulation schon für Mausklicks
+  tat. Beim Einschalten gehaltene Tasten bleiben so möglich. Nur das
+  Zurücksetzen der Encoder wartet auf die Bereitschaft.
+- **Editor-Drehungen:** Der Editor schickt seine Encoder-Schritte weiter
+  selbst, ohne Begrenzung durch den Wertebereich. Den Host-Parameter bewegt
+  er nur mit (`Delivery::AlreadyDelivered`), damit Configure ihn lernt.
+  Dreht man in der GUI weit in eine Richtung, bleibt der Host-Wert bis zum
+  nächsten Zurücksetzen am Rand stehen.
 - **Zurücksetzen nur im Timer:** Die Host-Benachrichtigung braucht den
   Message-Thread. Bei einem Offline-Bounce findet kein Zurücksetzen statt.
   Das ist unkritisch, weil die Werte dann aus der aufgezeichneten Automation
   kommen.
+- **Takt des Zurücksetzens:** Der Controller-Timer läuft alle 16 ms. Ein
+  Encoder wird also 300–316 ms nach der letzten Bewegung zurückgesetzt.
+- **Bridge / Remote-Device:** Ohne lokales `md::Device` verwirft der
+  Controller Panel-Eingaben. Über die Bridge haben die Panel-Parameter
+  derzeit keine Wirkung.

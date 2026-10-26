@@ -95,6 +95,7 @@ namespace mdJucePlugin
 
 		std::shared_ptr<md::FrontPanelPublisher> getFrontPanelPublisher() const;
 		bool sendPanelEvent(uint8_t _command, uint8_t _argument) const;
+		void setPanelPacket(const md::PanelPacket& _packet, bool _pressed) const;
 		bool refreshFrontPanelState(double _nowMilliseconds);
 		md::MachineModel getModel() const;
 		void createLcd();

@@ -61,6 +61,11 @@ namespace mdJucePlugin
 		{
 			return m_deliveredPanelEvents.load(std::memory_order_acquire);
 		}
+		// Editor input (message thread). Buttons and encoder switches go through the
+		// panel parameters so the mapper owns the scan rows and hosts can learn them.
+		void setPanelControlFromUi(md::panelParameters::Address _address, bool _pressed);
+		// The editor sends encoder ticks itself; this only moves the host parameter.
+		void notePanelEncoderTurnFromUi(md::PanelEncoder _encoder, int _steps);
 		// Host parameters that map to firmware CCs; panel controls are excluded.
 		size_t getAutomationParameterCount() const { return m_automationSlots.size(); }
 		uint64_t getTransmittedAutomationChangeCount() const

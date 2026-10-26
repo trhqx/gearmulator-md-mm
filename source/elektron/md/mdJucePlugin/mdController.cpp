@@ -129,22 +129,58 @@ namespace mdJucePlugin
 		m_panelInput.requestReset();
 	}
 
+	void Controller::setPanelControlFromUi(const md::panelParameters::Address _address, const bool _pressed)
+	{
+		const auto value = _pressed ? 1 : 0;
+		// Post first so the edge is ordered before any later change, even if the
+		// parameter's own (asynchronous) value notification coalesces press and release.
+		m_panelInput.post(_address.page, _address.index, value);
+		for(auto* const parameter : findSynthParam(0, _address.page, _address.index))
+			parameter->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
+	}
+
+	void Controller::notePanelEncoderTurnFromUi(const md::PanelEncoder _encoder, const int _steps)
+	{
+		const auto index = static_cast<uint8_t>(_encoder);
+		const auto& parameters = findSynthParam(0, md::panelParameters::EncoderPage, index);
+		if(parameters.empty() || _steps == 0)
+			return;
+		const auto current = parameters.front()->getUnnormalizedValue();
+		const auto next = std::clamp(current + _steps, 0,
+			static_cast<int>(md::PanelGestureMapper::g_encoderMaximum));
+		if(next == current)
+			return;
+		m_panelInput.post(md::panelParameters::EncoderPage, index, next,
+			PanelHostInput::Delivery::AlreadyDelivered);
+		for(auto* const parameter : parameters)
+			parameter->setUnnormalizedValueNotifyingHost(next, pluginLib::Parameter::Origin::Ui);
+	}
+
 	void Controller::drainPanelInput()
 	{
-		getProcessor().getPlugin().withDeviceLocked([this](synthLib::Device* const _device)
+		auto& plugin = getProcessor().getPlugin();
+		plugin.withDeviceLocked([this, &plugin](synthLib::Device* const _device)
 		{
 			auto* const device = dynamic_cast<md::Device*>(_device);
 			if(device == nullptr)
+			{
+				m_panelInput.discard();
 				return;
+			}
 			// Gesture timing uses emulated machine time: it advances with processed
 			// audio, so an offline render replays recorded recentres like realtime.
 			const auto& hardware = device->getHardware();
 			const PanelHostInput::DrainContext context{
 				static_cast<double>(hardware.hostCurrentCycle()) * 1000.0 / static_cast<double>(md::g_ucClockHz),
 				hardware.isFirmwareMidiReady(), device->hardwareEpoch()};
-			m_panelInput.drain(context, [this, device](const md::PanelEvent& _event)
+			auto& diagnostics = plugin.getRealtimeInstrumentation();
+			const auto model = static_cast<uint32_t>(m_model);
+			m_panelInput.drain(context, [&](const md::PanelEvent& _event)
 			{
-				if(device->sendPanelEvent(_event.command, _event.argument))
+				const auto token = diagnostics.beginPanelInput(model, _event.command, _event.argument);
+				const auto accepted = device->sendPanelEvent(_event.command, _event.argument);
+				diagnostics.endPanelInput(token, model, _event.command, _event.argument, accepted);
+				if(accepted)
 					m_deliveredPanelEvents.fetch_add(1, std::memory_order_acq_rel);
 			});
 		});

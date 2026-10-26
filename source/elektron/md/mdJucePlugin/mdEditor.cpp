@@ -1,6 +1,7 @@
 #include "mdEditor.h"
 
 #include "mdController.h"
+#include "mdLib/mdpanelparameters.h"
 #include "mdPanelAffordances.h"
 #include "mdPluginProcessor.h"
 #include "mdSettingsAudioInput.h"
@@ -642,8 +643,8 @@ namespace mdJucePlugin
 		if(action == panelAffordances::ShiftPanelLatch::PressAction::Momentary)
 			m_activePanelButtons.push_back({ _button, _packet });
 
-		const auto combined = m_panelRows.press(_packet);
-		(void)sendPanelEvent(combined.row, combined.mask);
+		m_panelRows.press(_packet);
+		setPanelPacket(_packet, true);
 	}
 
 	void Editor::releasePanelButton(juceRmlUi::ElemButton* const _button,
@@ -659,8 +660,8 @@ namespace mdJucePlugin
 
 		m_activePanelButtons.erase(it);
 		juceRmlUi::ElemButton::setChecked(_button, false);
-		const auto combined = m_panelRows.release(_packet);
-		(void)sendPanelEvent(combined.row, combined.mask);
+		m_panelRows.release(_packet);
+		setPanelPacket(_packet, false);
 		if(getModel() == md::MachineModel::Monomachine && isTrigger(_control))
 			releasePatternBankLatch();
 	}
@@ -673,8 +674,8 @@ namespace mdJucePlugin
 			m_activePanelButtons.pop_back();
 			if(active.button)
 				juceRmlUi::ElemButton::setChecked(active.button, false);
-			const auto combined = m_panelRows.release(active.packet);
-			(void)sendPanelEvent(combined.row, combined.mask);
+			m_panelRows.release(active.packet);
+			setPanelPacket(active.packet, false);
 		}
 	}
 
@@ -793,8 +794,8 @@ namespace mdJucePlugin
 				continue;
 
 			m_panelGesturePackets.push_back(*packet);
-			const auto combined = m_panelRows.press(*packet);
-			(void)sendPanelEvent(combined.row, combined.mask);
+			m_panelRows.press(*packet);
+			setPanelPacket(*packet, true);
 		}
 	}
 
@@ -806,8 +807,8 @@ namespace mdJucePlugin
 		// Release in reverse order so a chord lets go of the target before FUNCTION.
 		for(auto it = m_panelGesturePackets.rbegin(); it != m_panelGesturePackets.rend(); ++it)
 		{
-			const auto combined = m_panelRows.release(*it);
-			(void)sendPanelEvent(combined.row, combined.mask);
+			m_panelRows.release(*it);
+			setPanelPacket(*it, false);
 		}
 
 		m_panelGesturePackets.clear();
@@ -834,8 +835,8 @@ namespace mdJucePlugin
 
 			if(const auto packet = md::panelPacket(getModel(), _control))
 			{
-				const auto combined = m_panelRows.release(*packet);
-				(void)sendPanelEvent(combined.row, combined.mask);
+				m_panelRows.release(*packet);
+				setPanelPacket(*packet, false);
 			}
 		});
 
@@ -857,8 +858,8 @@ namespace mdJucePlugin
 		const auto wasActive = m_encoderPress.active();
 		if(const auto packet = m_encoderPress.release())
 		{
-			const auto combined = m_panelRows.release(*packet);
-			(void)sendPanelEvent(combined.row, combined.mask);
+			m_panelRows.release(*packet);
+			setPanelPacket(*packet, false);
 		}
 		if(m_pressedEncoder)
 			m_pressedEncoder->SetClass("encoderPressed", false);
@@ -885,8 +886,12 @@ namespace mdJucePlugin
 	void Editor::releaseAllPanelInputs()
 	{
 		for(uint8_t row = 0x20; row <= 0x26; ++row)
-			if(m_panelRows.mask(row) != 0)
-				(void)sendPanelEvent(row, 0);
+		{
+			const auto mask = m_panelRows.mask(row);
+			for(uint8_t bit = 0; bit < 8; ++bit)
+				if(mask & (1u << bit))
+					setPanelPacket({row, static_cast<uint8_t>(1u << bit)}, false);
+		}
 		m_panelRows.reset();
 	}
 
@@ -919,11 +924,12 @@ namespace mdJucePlugin
 
 		const auto step = m_panelSteps.front();
 
-		const auto combined = step.press ? m_panelRows.press(step.packet) : m_panelRows.release(step.packet);
-		// Navigation pulses are retryable: do not advance to the matching release
-		// until this row state actually entered the bounded FIFO.
-		if(!sendPanelEvent(combined.row, combined.mask))
-			return;
+		// The panel parameters deliver every edge, so a step never needs a retry.
+		if(step.press)
+			m_panelRows.press(step.packet);
+		else
+			m_panelRows.release(step.packet);
+		setPanelPacket(step.packet, step.press);
 		m_panelSteps.pop_front();
 
 		// Give the firmware a complete timer interval to update its LED readback
@@ -1063,8 +1069,8 @@ namespace mdJucePlugin
 		m_patternBankPacket = _packet;
 		juceRmlUi::ElemButton::setChecked(_button, true);
 
-		const auto combined = m_panelRows.press(_packet);
-		(void)sendPanelEvent(combined.row, combined.mask);
+		m_panelRows.press(_packet);
+		setPanelPacket(_packet, true);
 	}
 
 	void Editor::releasePatternBankLatch()
@@ -1075,8 +1081,8 @@ namespace mdJucePlugin
 		if(m_patternBankButton)
 			juceRmlUi::ElemButton::setChecked(m_patternBankButton, false);
 
-		const auto combined = m_panelRows.release(*m_patternBankPacket);
-		(void)sendPanelEvent(combined.row, combined.mask);
+		m_panelRows.release(*m_patternBankPacket);
+		setPanelPacket(*m_patternBankPacket, false);
 
 		m_patternBankButton = nullptr;
 		m_patternBankPacket.reset();
@@ -1785,8 +1791,8 @@ namespace mdJucePlugin
 						updateLcdInteractionState();
 						m_pressedEncoder = _knob;
 						_knob->SetClass("encoderPressed", true);
-						const auto combined = m_panelRows.press(*packet);
-						(void)sendPanelEvent(combined.row, combined.mask);
+						m_panelRows.press(*packet);
+						setPanelPacket(*packet, true);
 					}
 				});
 		}
@@ -1843,6 +1849,16 @@ namespace mdJucePlugin
 		const auto count = std::min(std::abs(_steps), g_encoderBurstCap);
 		for(int step = 0; step < count; ++step)
 			(void)sendPanelEvent(*command, argument);
+		// Let the host see the turn (Configure, automation) without a second delivery.
+		m_controller.notePanelEncoderTurnFromUi(_encoder, _steps > 0 ? count : -count);
+	}
+
+	void Editor::setPanelPacket(const md::PanelPacket& _packet, const bool _pressed) const
+	{
+		// The controller's mapper is the single owner of the scan rows; the editor
+		// only tracks which controls it holds itself.
+		if(const auto address = md::panelParameters::addressForPacket(getModel(), _packet))
+			m_controller.setPanelControlFromUi(*address, _pressed);
 	}
 
 	void Editor::createLeds()
