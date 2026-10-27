@@ -42,8 +42,10 @@ namespace mdJucePlugin
 		{
 			// 1 holds the control, 0 releases it (CC buttons, automation).
 			Momentary,
-			// Every change of a host value is one short press. Hosts such as Ableton
-			// Live toggle a note-mapped on/off parameter on each note-on.
+			// A change to 1 is one short press, after which the owner returns the
+			// parameter to 0 (takeReturnToOffRequests). Hosts such as Ableton Live
+			// toggle a note-mapped on/off parameter on each note-on, so every note
+			// is one press and the host shows Off whenever the key is up.
 			Tap
 		};
 
@@ -116,6 +118,27 @@ namespace mdJucePlugin
 			m_resetRequested.store(true, std::memory_order_release);
 		}
 
+		// Any thread. One bit per slotOf() whose host parameter should be set back
+		// to 0 after a tap; each request is reported once.
+		uint64_t takeReturnToOffRequests()
+		{
+			return m_returnToOffRequests.exchange(0, std::memory_order_acq_rel);
+		}
+
+		// The slot of a button or encoder push, as used by takeReturnToOffRequests.
+		std::optional<uint8_t> slotOf(const uint8_t _page, const uint8_t _index) const
+		{
+			return slotFor(_page, _index);
+		}
+
+		static md::panelParameters::Address addressOf(const uint8_t _slot)
+		{
+			namespace pp = md::panelParameters;
+			if(_slot >= g_firstPushSlot)
+				return {pp::EncoderPushPage, static_cast<uint8_t>(_slot - g_firstPushSlot)};
+			return {pp::ButtonPage, _slot};
+		}
+
 		// Audio thread only. Drops everything queued, e.g. while no local device
 		// exists, so stale input cannot reach a machine created later.
 		void discard()
@@ -161,6 +184,7 @@ namespace mdJucePlugin
 				m_tapReleaseAt[slot] = -1.0;
 				setRowControl(slot, false, output);
 				flush();
+				requestReturnToOff(slot);
 			}
 
 			std::array<int, g_encoderCount> budget{};
@@ -287,6 +311,13 @@ namespace mdJucePlugin
 			m_carrySteps[_encoder] = std::clamp(m_carrySteps[_encoder] + _steps, -g_maxQueuedSteps, g_maxQueuedSteps);
 		}
 
+		void requestReturnToOff(const uint8_t _slot)
+		{
+			// The host value is already 0 if the host toggled it back during the tap.
+			if(m_lastHostValue[_slot] != 0)
+				m_returnToOffRequests.fetch_or(uint64_t{1} << _slot, std::memory_order_acq_rel);
+		}
+
 		void forgetMachine()
 		{
 			m_mapper.reset();
@@ -312,15 +343,21 @@ namespace mdJucePlugin
 			}
 			const auto changed = m_lastHostValue[_slot] != _value;
 			m_lastHostValue[_slot] = _value;
+			const auto tap = m_buttonMode.load(std::memory_order_acquire) == ButtonMode::Tap;
 			if(_withheld)
+			{
+				if(tap && changed && _value != 0)
+					requestReturnToOff(_slot);
 				return;
-			if(m_buttonMode.load(std::memory_order_acquire) == ButtonMode::Momentary)
+			}
+			if(!tap)
 			{
 				setRowControl(_slot, _value != 0, _output);
 				return;
 			}
-			// A tap still in progress absorbs a toggle arriving within the hold time.
-			if(!changed || m_tapReleaseAt[_slot] >= 0.0)
+			// Only a change to 1 presses; a tap still in progress absorbs a toggle
+			// arriving within the hold time.
+			if(!changed || _value == 0 || m_tapReleaseAt[_slot] >= 0.0)
 				return;
 			if(setRowControl(_slot, true, _output))
 				m_tapReleaseAt[_slot] = _context.nowMilliseconds + g_tapMilliseconds;
@@ -333,6 +370,7 @@ namespace mdJucePlugin
 		std::atomic<uint64_t> m_dirty{0};
 		std::array<std::atomic<int32_t>, g_encoderCount> m_overflowSteps{};
 		std::atomic<bool> m_resetRequested{false};
+		std::atomic<uint64_t> m_returnToOffRequests{0};
 		std::atomic<ButtonMode> m_buttonMode{ButtonMode::Momentary};
 
 		// Consumer-owned.

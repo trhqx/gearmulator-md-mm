@@ -458,3 +458,24 @@ lässt los. Der Antipp-Modus gilt nur für Host-Parameter.
 Überlauf), `mdPanelHostParameterFirmwareTest` (CC-Burst bewegt den
 Track-Parameter um genau 6, Note drückt RECORD, MIDI-RX der Maschine bleibt
 unverändert, andere Kanäle kommen weiter an).
+
+## Antippen: Rückkehr auf Off (2026-10-27)
+
+Abnahme in Live: Play stand nach Start/Stop abwechselnd auf On und Off, weil
+jeder Wertwechsel ein Druck war und Live den Wert bei jeder Note umschaltet.
+
+Neu im Antippen-Modus:
+- Nur der Wechsel auf **1** drückt die Taste (40 ms). Ein Wechsel auf 0 drückt nie.
+- Nach dem Loslassen setzt das Plugin den Host-Parameter auf dem Message-Thread
+  (Controller-Timer) wieder auf **0** (`PanelHostInput::takeReturnToOffRequests`,
+  `Controller::returnTappedPanelButtonsToOff`). Das Echo dieser 0 ist kein Druck.
+- Der Parameter steht damit in Ruhe immer auf Off; die nächste Note schaltet auf
+  On und ist wieder genau ein Druck. In der Automation erscheint ein Tipp als
+  kurzer Impuls 1→0, beim Abspielen drückt jeder Impuls einmal.
+- Auch während des Boots zurückgehaltene Einsen werden auf 0 zurückgesetzt.
+- Schaltet der Host selbst während des Tippens auf 0 zurück, entfällt das
+  Zurücksetzen.
+
+Tests: `mdPanelHostInputTest` (Druck nur bei 1, Rücksetz-Anforderung nach dem
+Loslassen, Echo ohne Druck, Boot), `mdPanelHostParameterFirmwareTest`
+(RECORD-LED wechselt bei jedem Tipp, Parameter steht danach auf 0).

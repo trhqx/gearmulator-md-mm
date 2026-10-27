@@ -141,6 +141,20 @@ namespace mdJucePlugin
 			: PanelHostInput::ButtonMode::Momentary);
 	}
 
+	void Controller::returnTappedPanelButtonsToOff()
+	{
+		auto bits = m_panelInput.takeReturnToOffRequests();
+		for(uint8_t slot = 0; bits != 0; ++slot, bits >>= 1)
+		{
+			if((bits & 1) == 0)
+				continue;
+			const auto address = PanelHostInput::addressOf(slot);
+			for(auto* const parameter : findSynthParam(0, address.page, address.index))
+				if(parameter->getUnnormalizedValue() != 0)
+					parameter->setUnnormalizedValueNotifyingHost(0, pluginLib::Parameter::Origin::Ui);
+		}
+	}
+
 	void Controller::setPanelControlFromUi(const md::panelParameters::Address _address, const bool _pressed)
 	{
 		const auto value = _pressed ? 1 : 0;
@@ -520,6 +534,7 @@ namespace mdJucePlugin
 		if(messageManager != nullptr && messageManager->isThisTheMessageThread())
 		{
 			servicePanelMidi();
+			returnTappedPanelButtonsToOff();
 			for(const auto& [address, parameters] : getExposedParameters())
 			{
 				(void)address;

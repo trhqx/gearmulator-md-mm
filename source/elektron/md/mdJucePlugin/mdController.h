@@ -66,6 +66,9 @@ namespace mdJucePlugin
 		static constexpr const char* g_hostButtonsTapConfigKey = "panelHostButtonsTap";
 		static constexpr bool g_hostButtonsTapDefault = true;
 		void setHostButtonsTap(bool _tap);
+		// Message thread (controller timer). In tap mode, sets panel parameters back
+		// to 0 once their tap has been played, so the host shows Off again.
+		void returnTappedPanelButtonsToOff();
 		// Editor input (message thread). Buttons and encoder switches go through the
 		// panel parameters so the mapper owns the scan rows and hosts can learn them.
 		void setPanelControlFromUi(md::panelParameters::Address _address, bool _pressed);

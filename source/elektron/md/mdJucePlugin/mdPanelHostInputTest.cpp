@@ -59,6 +59,7 @@ namespace
 		expect(input.post(pp::ButtonPage, button(PanelControl::Play), 0), "release post rejected");
 		const auto release = drain(input, machine);
 		expect(release.size() == 1 && release[0].argument == 0, "release did not clear the row");
+		expect(input.takeReturnToOffRequests() == 0, "momentary mode changed the host value");
 	}
 
 	void checkDuplicateDeliveryIsIgnored()
@@ -133,31 +134,67 @@ namespace
 
 	// Ableton Live toggles a note-mapped on/off parameter on every note-on and
 	// ignores note-off. In tap mode every host value change is one short press.
+	uint64_t slotBit(const PanelHostInput& _input, const uint8_t _page, const uint8_t _index)
+	{
+		const auto slot = _input.slotOf(_page, _index);
+		expect(slot.has_value(), "no slot for a panel control");
+		return uint64_t{1} << *slot;
+	}
+
+	// Ableton Live toggles a note-mapped on/off parameter on every note-on. In tap
+	// mode a change to 1 is one short press, after which the plugin returns the
+	// parameter to 0, so the next note toggles it to 1 again and the host shows
+	// Off whenever the key is up.
 	void checkTapModeTurnsToggledValuesIntoPresses()
 	{
 		const auto model = MachineModel::Machinedrum;
 		PanelHostInput input(model);
 		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
 		Machine machine;
-		const auto press = pressOf(model, PanelControl::Trigger1);
+		const auto press = pressOf(model, PanelControl::Play);
 		const PanelEvent release{press.command, 0};
 		constexpr double hold = PanelHostInput::g_tapMilliseconds;
+		const auto play = button(PanelControl::Play);
+		const auto bit = slotBit(input, pp::ButtonPage, play);
 
-		input.post(pp::ButtonPage, button(PanelControl::Trigger1), 1);
-		expect(drain(input, machine) == std::vector<PanelEvent>{press}, "first toggle did not press");
+		input.post(pp::ButtonPage, play, 1);
+		expect(drain(input, machine) == std::vector<PanelEvent>{press}, "a toggle to 1 did not press");
+		expect(input.takeReturnToOffRequests() == 0, "returned to Off while the tap is still held");
 		machine.now += hold - 1;
 		expect(drain(input, machine).empty(), "tap released before the firmware could scan it");
 		machine.now += 1;
 		expect(drain(input, machine) == std::vector<PanelEvent>{release}, "tap was not released");
+		expect(input.takeReturnToOffRequests() == bit, "a finished tap did not return to Off");
+		expect(input.takeReturnToOffRequests() == 0, "the return request was not consumed");
 
-		// The next note-on toggles the value back to 0: that is another press.
+		// The plugin's own return to 0 comes back as host input.
+		input.post(pp::ButtonPage, play, 0);
 		machine.now += 100;
-		input.post(pp::ButtonPage, button(PanelControl::Trigger1), 0);
-		expect(drain(input, machine) == std::vector<PanelEvent>{press}, "toggle back to 0 did not press");
-		input.post(pp::ButtonPage, button(PanelControl::Trigger1), 0);
+		expect(drain(input, machine).empty(), "returning to Off pressed the key");
+
+		input.post(pp::ButtonPage, play, 1);
+		input.post(pp::ButtonPage, play, 1);
+		expect(drain(input, machine) == std::vector<PanelEvent>{press}, "the next toggle did not press once");
 		machine.now += hold;
-		expect(drain(input, machine) == std::vector<PanelEvent>{release},
-			"duplicate delivery of a toggle produced a second press");
+		expect(drain(input, machine) == std::vector<PanelEvent>{release}, "second tap was not released");
+	}
+
+	void checkTapModeIgnoresTogglesToOff()
+	{
+		// If the host toggles to 0 before the plugin did, that is no press either.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
+		Machine machine;
+		input.post(pp::ButtonPage, button(PanelControl::Stop), 1);
+		(void)drain(input, machine);
+		machine.now += 10;
+		input.post(pp::ButtonPage, button(PanelControl::Stop), 0);
+		expect(drain(input, machine).empty(), "a toggle to 0 during a tap produced events");
+		machine.now += PanelHostInput::g_tapMilliseconds;
+		const auto released = drain(input, machine);
+		expect(released.size() == 1 && released[0].argument == 0, "tap was not released");
+		expect(input.takeReturnToOffRequests() == 0, "a parameter already at 0 was returned to Off");
 	}
 
 	void checkTapModeKeepsEditorMomentary()
@@ -203,10 +240,13 @@ namespace
 		machine.ready = false;
 		input.post(pp::ButtonPage, button(PanelControl::Play), 1);
 		expect(drain(input, machine).empty(), "a toggle during boot pressed a key");
+		expect(input.takeReturnToOffRequests() == slotBit(input, pp::ButtonPage, button(PanelControl::Play)),
+			"a withheld toggle was not returned to Off");
+		input.post(pp::ButtonPage, button(PanelControl::Play), 0);
 		machine.ready = true;
 		machine.now += 1000;
 		expect(drain(input, machine).empty(), "a withheld toggle was delivered later");
-		input.post(pp::ButtonPage, button(PanelControl::Play), 0);
+		input.post(pp::ButtonPage, button(PanelControl::Play), 1);
 		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Play)},
 			"the first toggle after boot did not press");
 	}
@@ -416,6 +456,7 @@ int main()
 	checkEditorInputBeforeFirmwareReadinessIsDelivered();
 	checkMissingDeviceDiscardsInput();
 	checkTapModeTurnsToggledValuesIntoPresses();
+	checkTapModeIgnoresTogglesToOff();
 	checkTapModeKeepsEditorMomentary();
 	checkTapModeAppliesToEncoderPushes();
 	checkTapModeIgnoresTogglesWhileBooting();

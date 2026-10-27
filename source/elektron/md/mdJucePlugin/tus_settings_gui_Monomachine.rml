@@ -40,7 +40,7 @@
 		<label>MIDI-mapped panel buttons tap</label>
 	</div>
 	<settingsspacer1/>
-	<label>On: every change of a panel button parameter is one short press. Use this when mapping notes in Ableton Live, which toggles the parameter on each note. Off: 1 holds the button and 0 releases it, for momentary CC buttons, held trigs and parameter locks. Clicks in the plugin window always behave like the hardware.</label>
+	<label>On: switching a panel button parameter on is one short press, and the plugin switches it back off right after, so every mapped note in Ableton Live is one press and the parameter shows Off when the key is up. Off: 1 holds the button and 0 releases it, for momentary CC buttons, held trigs and parameter locks. Clicks in the plugin window always behave like the hardware.</label>
 
 	<settingsspacer1/>
 	<h1>Panel MIDI</h1>

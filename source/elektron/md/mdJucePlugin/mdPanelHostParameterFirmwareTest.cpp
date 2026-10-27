@@ -77,8 +77,9 @@ namespace
 			"second host-parameter RECORD press did not toggle the LED back");
 	}
 
-	// Ableton Live toggles a note-mapped on/off parameter on each note-on, so in
-	// tap mode every value change must be exactly one press of the button.
+	// Ableton Live toggles a note-mapped on/off parameter on each note-on. In tap
+	// mode a toggle to 1 is one press of the button, after which the plugin sets
+	// the parameter back to 0 so the host shows Off and the next note presses again.
 	void verifyTapMode(Harness& _harness)
 	{
 		auto& controller = _harness.controller;
@@ -90,10 +91,19 @@ namespace
 		_harness.process(64);
 		require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) != initial,
 			"a toggled-on parameter did not press RECORD in tap mode");
-		hostWrite(record, 0);
+		controller.returnTappedPanelButtonsToOff();
+		require(record.getUnnormalizedValue() == 0, "a played tap did not return the parameter to Off");
+		_harness.process(64);
+		require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) != initial,
+			"returning the parameter to Off pressed RECORD again");
+
+		hostWrite(record, 1);
 		_harness.process(64);
 		require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) == initial,
-			"a toggled-off parameter did not press RECORD again in tap mode");
+			"the next toggle did not press RECORD again in tap mode");
+		controller.returnTappedPanelButtonsToOff();
+		require(record.getUnnormalizedValue() == 0, "the second tap did not return to Off");
+		_harness.process(16);
 		controller.setHostButtonsTap(false);
 	}
 
