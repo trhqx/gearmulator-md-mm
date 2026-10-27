@@ -23,6 +23,7 @@ set(SOURCES
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h
 	mdpanelgesturemapper.cpp mdpanelgesturemapper.h
+	mdpanelmidimap.cpp mdpanelmidimap.h
 	mdrampacking.h
 	mdsim.cpp mdsim.h
 	mdrom.cpp mdrom.h

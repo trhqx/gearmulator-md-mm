@@ -32,6 +32,7 @@
 #include "juceRmlUi/rmlElemKnob.h"
 #include "juceRmlUi/rmlEventListener.h"
 #include "juceRmlUi/rmlHelper.h"
+#include "juceRmlUi/rmlMenu.h"
 #include "juceRmlUi/juceRmlComponent.h"
 
 #include "RmlUi/Core/Element.h"
@@ -265,6 +266,16 @@ namespace mdJucePlugin
 	void Editor::create()
 	{
 		jucePluginEditorLib::Editor::create();
+		m_onPanelMidiMapChanged = baseLib::EventListener<>(m_controller.onPanelMidiMapChanged, [this]
+		{
+			updatePanelMidiLearnHighlight();
+		});
+		// Every click starts without a panel target; a panel control's own listener
+		// sets it again before the context menu opens.
+		juceRmlUi::EventListener::Add(getRmlRootElement(), Rml::EventId::Mousedown, [this](Rml::Event&)
+		{
+			m_contextPanelMidiTarget.reset();
+		}, true);
 
 		if(auto* romSelector = findChild<juceRmlUi::ElemComboBox>("RomSelector", false))
 		{
@@ -526,6 +537,7 @@ namespace mdJucePlugin
 				b->SetProperty(Rml::PropertyId::PointerEvents, Rml::Style::PointerEvents::None);
 				continue;
 			}
+			addPanelMidiTarget(b, md::PanelMidiTarget::button(pb.control));
 
 			// On the hardware, A/E through D/H are held while a trig key chooses the
 			// pattern number. A normal MM bank click therefore keeps its existing latch.
@@ -539,6 +551,9 @@ namespace mdJucePlugin
 				juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
 					[this, b, packet, control = pb.control](Rml::Event& _event)
 				{
+					// The context menu (panel MIDI learn) must not press the key.
+					if(juceRmlUi::helper::isContextMenu(_event))
+						return;
 					const bool shiftDown = _event.GetParameter<int>("shift_key", 0) != 0;
 					if(!shiftDown && !m_shiftPanelLatch.empty())
 						releasePanelButtonGestures();
@@ -567,6 +582,9 @@ namespace mdJucePlugin
 			juceRmlUi::EventListener::Add(b, Rml::EventId::Mousedown,
 				[this, b, packet, control = pb.control](Rml::Event& _event)
 			{
+				// The context menu (panel MIDI learn) must not press the key.
+				if(juceRmlUi::helper::isContextMenu(_event))
+					return;
 				pressPanelButton(b, control, *packet,
 					_event.GetParameter<int>("shift_key", 0) != 0);
 			});
@@ -1796,6 +1814,7 @@ namespace mdJucePlugin
 					}
 				});
 		}
+		addPanelMidiTarget(_knob, md::PanelMidiTarget::encoder(_encoder));
 		_knob->setMinValue(0.0f);
 		_knob->setMaxValue(g_encoderRange);
 		_knob->setEndless(true);
@@ -1849,6 +1868,83 @@ namespace mdJucePlugin
 		const auto count = std::min(std::abs(_steps), g_encoderBurstCap);
 		for(int step = 0; step < count; ++step)
 			(void)sendPanelEvent(*command, argument);
+	}
+
+	void Editor::addPanelMidiTarget(Rml::Element* const _element, const md::PanelMidiTarget _target)
+	{
+		if(!_element || !_target.isSupported(getModel()))
+			return;
+		// Runs before the document-level listener that opens the context menu.
+		juceRmlUi::EventListener::Add(_element, Rml::EventId::Mousedown, [this, _element, _target](Rml::Event& _event)
+		{
+			if(juceRmlUi::helper::isContextMenu(_event))
+				m_contextPanelMidiTarget = std::make_pair(_element, _target);
+		});
+	}
+
+	void Editor::updatePanelMidiLearnHighlight()
+	{
+		if(m_panelMidiLearnElement && !m_controller.isPanelMidiLearning())
+		{
+			m_panelMidiLearnElement->RemoveProperty(Rml::PropertyId::Opacity);
+			m_panelMidiLearnElement = nullptr;
+		}
+	}
+
+	void Editor::addPanelMidiMenuEntries(juceRmlUi::Menu& _menu)
+	{
+		const auto found = m_contextPanelMidiTarget;
+		m_contextPanelMidiTarget.reset();
+		if(!found)
+			return;
+		const auto [element, target] = *found;
+
+		const auto& map = m_controller.getPanelMidiMap();
+		const auto isEncoder = target.type == md::PanelMidiTarget::Type::Encoder;
+		const std::string name = isEncoder ? md::panelEncoderName(static_cast<md::PanelEncoder>(target.index))
+			: md::panelControlName(static_cast<md::PanelControl>(target.index));
+		const auto describe = [](const md::PanelMidiTrigger _trigger)
+		{
+			return std::string(_trigger.type == md::PanelMidiTrigger::Type::Note ? "Note " : "CC ")
+				+ std::to_string(_trigger.number);
+		};
+
+		_menu.addSeparator();
+		if(map.channel == md::PanelMidiMap::g_off)
+		{
+			_menu.addEntry("Panel MIDI Learn: choose a panel MIDI channel in Settings first", false, false, [] {});
+		}
+		else
+		{
+			const auto channel = " (channel " + std::to_string(map.channel + 1) + ")";
+			_menu.addEntry("Panel MIDI Learn '" + name + "'" + (isEncoder ? ": turn a knob or press a key" : "")
+				+ channel, [this, element = element, target = target]
+			{
+				m_controller.cancelPanelMidiLearn();
+				updatePanelMidiLearnHighlight();
+				m_controller.learnPanelMidi(target);
+				m_panelMidiLearnElement = element;
+				element->SetProperty(Rml::PropertyId::Opacity, Rml::Property(0.5f, Rml::Unit::NUMBER));
+			});
+		}
+		std::vector<md::PanelMidiTarget> bound{target};
+		if(isEncoder)
+			bound.push_back({md::PanelMidiTarget::Type::EncoderPush, target.index});
+		for(const auto& t : bound)
+		{
+			const auto trigger = map.findTrigger(t);
+			if(!trigger)
+				continue;
+			const auto what = t.type == md::PanelMidiTarget::Type::EncoderPush ? "push" : "mapping";
+			_menu.addEntry("Forget panel MIDI " + std::string(what) + " (" + describe(*trigger) + ")", [this, t]
+			{
+				auto updated = m_controller.getPanelMidiMap();
+				updated.unbind(t);
+				m_controller.setPanelMidiMap(updated);
+			});
+		}
+		if(m_controller.isPanelMidiLearning())
+			_menu.addEntry("Cancel Panel MIDI Learn", [this] { m_controller.cancelPanelMidiLearn(); });
 	}
 
 	void Editor::setPanelPacket(const md::PanelPacket& _packet, const bool _pressed) const

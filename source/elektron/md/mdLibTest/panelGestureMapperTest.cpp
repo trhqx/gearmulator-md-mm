@@ -15,8 +15,6 @@ namespace
 	using md::PanelEvent;
 	using md::PanelGestureMapper;
 
-	constexpr double g_idle = PanelGestureMapper::g_recentreIdleMilliseconds;
-
 	void expect(const bool _condition, const char* const _message)
 	{
 		if(_condition)
@@ -49,11 +47,10 @@ namespace
 		return events(output);
 	}
 
-	std::vector<PanelEvent> turn(PanelGestureMapper& _mapper, const PanelEncoder _encoder,
-		const uint8_t _position, const double _now)
+	std::vector<PanelEvent> turn(const PanelGestureMapper& _mapper, const PanelEncoder _encoder, const int _steps)
 	{
 		PanelGestureMapper::Output output;
-		_mapper.setEncoderPosition(_encoder, _position, _now, output);
+		_mapper.turnEncoder(_encoder, _steps, output);
 		return events(output);
 	}
 
@@ -139,67 +136,30 @@ namespace
 		}
 	}
 
-	void checkEncoderDeltas()
+	void checkEncoderTicks()
 	{
-		PanelGestureMapper mapper(MachineModel::Machinedrum);
-		const auto command = *md::panelEncoderCommand(MachineModel::Machinedrum, PanelEncoder::DataEntryA);
-		const PanelEvent up{command, 0x01};
-		const PanelEvent down{command, 0xff};
-		double now = 0.0;
-		expect(turn(mapper, PanelEncoder::DataEntryA, 64, now).empty(), "centre position produced ticks");
-		expect(turn(mapper, PanelEncoder::DataEntryA, 67, now += 10) == repeat(up, 3), "+3 did not emit three ticks");
-		expect(turn(mapper, PanelEncoder::DataEntryA, 67, now += 1).empty(), "duplicate value emitted ticks");
-		expect(turn(mapper, PanelEncoder::DataEntryA, 62, now += 10) == repeat(down, 5), "-5 did not emit five ticks");
-		expect(turn(mapper, PanelEncoder::DataEntryA, 127, now += 10)
-			== repeat(up, PanelGestureMapper::g_encoderBurstCap), "large jump was not capped");
+		for(const auto model : {MachineModel::Machinedrum, MachineModel::Monomachine})
+		{
+			const PanelGestureMapper mapper(model);
+			const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryA);
+			expect(turn(mapper, PanelEncoder::DataEntryA, 0).empty(), "zero steps emitted ticks");
+			expect(turn(mapper, PanelEncoder::DataEntryA, 3) == repeat({command, 0x01}, 3), "+3 did not emit three ticks");
+			expect(turn(mapper, PanelEncoder::DataEntryA, -5) == repeat({command, 0xff}, 5), "-5 did not emit five ticks");
+		}
 	}
 
-	void checkRecentreEchoIsIgnored()
+	void checkEncoderTicksRespectOutputSpace()
 	{
 		PanelGestureMapper mapper(MachineModel::Machinedrum);
 		const auto command = *md::panelEncoderCommand(MachineModel::Machinedrum, PanelEncoder::DataEntryB);
-		double now = 0.0;
-		(void)turn(mapper, PanelEncoder::DataEntryB, 90, now);
-		// A recentre (self-initiated or replayed from automation) lands exactly on
-		// the centre after the idle interval and moves by more than one step.
-		expect(turn(mapper, PanelEncoder::DataEntryB, PanelGestureMapper::g_encoderCentre, now += g_idle).empty(),
-			"jump back to centre after idle emitted counter-ticks");
-		expect(turn(mapper, PanelEncoder::DataEntryB, 65, now += 10) == std::vector<PanelEvent>{{command, 0x01}},
-			"turning after a recentre did not continue from the centre");
-	}
-
-	void checkRealMovesOntoCentreAreKept()
-	{
-		PanelGestureMapper mapper(MachineModel::Machinedrum);
-		const auto command = *md::panelEncoderCommand(MachineModel::Machinedrum, PanelEncoder::DataEntryC);
-		double now = 0.0;
-		(void)turn(mapper, PanelEncoder::DataEntryC, 66, now);
-		expect(turn(mapper, PanelEncoder::DataEntryC, 64, now += 10) == repeat({command, 0xff}, 2),
-			"a fast move onto the centre was treated as a recentre");
-		(void)turn(mapper, PanelEncoder::DataEntryC, 63, now += 10);
-		expect(turn(mapper, PanelEncoder::DataEntryC, 64, now += 2 * g_idle) == std::vector<PanelEvent>{{command, 0x01}},
-			"a single step onto the centre after a pause was dropped");
-	}
-
-	void checkRebase()
-	{
-		PanelGestureMapper mapper(MachineModel::Monomachine);
-		const auto command = *md::panelEncoderCommand(MachineModel::Monomachine, PanelEncoder::Level);
-		mapper.rebaseEncoder(PanelEncoder::Level, 20);
-		expect(turn(mapper, PanelEncoder::Level, 20, 0.0).empty(), "rebased position produced ticks");
-		expect(turn(mapper, PanelEncoder::Level, 22, 10.0) == repeat({command, 0x01}, 2),
-			"delta was not measured from the rebased position");
-	}
-
-	void checkAdoptedPositionCountsAsMovement()
-	{
-		PanelGestureMapper mapper(MachineModel::Machinedrum);
-		constexpr auto encoder = PanelEncoder::DataEntryF;
-		mapper.adoptEncoderPosition(encoder, 110, 0.0);
-		expect(!mapper.recentreTarget(encoder, g_idle / 2), "adopted position recentred too early");
-		expect(mapper.recentreTarget(encoder, g_idle).has_value(), "adopted position was never recentred");
-		expect(turn(mapper, encoder, PanelGestureMapper::g_encoderCentre, g_idle).empty(),
-			"recentre after an adopted position emitted ticks");
+		PanelGestureMapper::Output output;
+		(void)mapper.setButton(PanelControl::Play, true, output);
+		const auto room = static_cast<int>(PanelGestureMapper::Output::g_capacity - output.count);
+		expect(mapper.turnEncoder(PanelEncoder::DataEntryB, -100, output) == -room,
+			"a long turn did not report the steps that fit");
+		expect(output.count == PanelGestureMapper::Output::g_capacity, "a long turn did not fill the output");
+		expect(output.events.back() == PanelEvent{command, 0xff}, "a long turn emitted the wrong tick");
+		expect(mapper.turnEncoder(PanelEncoder::DataEntryB, 1, output) == 0, "a full output accepted another tick");
 	}
 
 	void checkParameterAddressForPacket()
@@ -227,22 +187,6 @@ namespace
 		}
 	}
 
-	void checkRecentreTarget()
-	{
-		PanelGestureMapper mapper(MachineModel::Machinedrum);
-		constexpr auto encoder = PanelEncoder::DataEntryD;
-		double now = 0.0;
-		expect(!mapper.recentreTarget(encoder, now + 10 * g_idle), "untouched encoder asked for a recentre");
-		(void)turn(mapper, encoder, 70, now);
-		expect(!mapper.recentreTarget(encoder, now + 10 * g_idle), "position inside the middle third was recentred");
-		(void)turn(mapper, encoder, 100, now += 10);
-		expect(!mapper.recentreTarget(encoder, now + g_idle / 2), "recentre requested before the idle interval");
-		const auto target = mapper.recentreTarget(encoder, now + g_idle);
-		expect(target && *target == PanelGestureMapper::g_encoderCentre, "idle encoder outside the band not recentred");
-		(void)turn(mapper, encoder, 20, now += 10);
-		expect(mapper.recentreTarget(encoder, now + g_idle).has_value(), "low end of the band was not recentred");
-	}
-
 	void checkUnsupportedControlsAreInert()
 	{
 		PanelGestureMapper mapper(MachineModel::Monomachine);
@@ -250,7 +194,7 @@ namespace
 			"test premise: MM has no sound-selection encoder");
 		expect(!PanelGestureMapper::supportsEncoder(MachineModel::Monomachine, PanelEncoder::SoundSelection),
 			"unsupported encoder reported as supported");
-		expect(turn(mapper, PanelEncoder::SoundSelection, 100, 0.0).empty(), "unsupported encoder emitted ticks");
+		expect(turn(mapper, PanelEncoder::SoundSelection, 4).empty(), "unsupported encoder emitted ticks");
 		for(uint8_t c = 0; c <= static_cast<uint8_t>(PanelControl::ClassicExtended); ++c)
 		{
 			const auto control = static_cast<PanelControl>(c);
@@ -293,19 +237,13 @@ namespace
 
 	void checkResetForgetsEverythingSilently()
 	{
-		const auto model = MachineModel::Machinedrum;
-		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryA);
-		PanelGestureMapper mapper(model);
+		PanelGestureMapper mapper(MachineModel::Machinedrum);
 		(void)button(mapper, PanelControl::Play, true);
 		(void)push(mapper, PanelEncoder::DataEntryA, true);
-		(void)turn(mapper, PanelEncoder::DataEntryA, 100, 0.0);
 		// A rebooted machine starts with released controls, so reset emits nothing.
 		mapper.reset();
 		expect(button(mapper, PanelControl::Play, false).empty(), "reset left a button held");
 		expect(push(mapper, PanelEncoder::DataEntryA, false).empty(), "reset left a push held");
-		expect(!mapper.recentreTarget(PanelEncoder::DataEntryA, 10000.0), "reset kept encoder history");
-		expect(turn(mapper, PanelEncoder::DataEntryA, 65, 10.0) == std::vector<PanelEvent>{{command, 0x01}},
-			"reset did not return the encoder to the centre");
 	}
 }
 
@@ -315,13 +253,9 @@ int main()
 	checkButtonIdempotence();
 	checkRowMerging();
 	checkEncoderPushSharesRowState();
-	checkEncoderDeltas();
-	checkRecentreEchoIsIgnored();
-	checkRealMovesOntoCentreAreKept();
-	checkRebase();
-	checkRecentreTarget();
+	checkEncoderTicks();
+	checkEncoderTicksRespectOutputSpace();
 	checkParameterAddressForPacket();
-	checkAdoptedPositionCountsAsMovement();
 	checkUnsupportedControlsAreInert();
 	checkReleaseAll();
 	checkResetForgetsEverythingSilently();

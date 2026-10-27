@@ -399,10 +399,62 @@ also bereits **absolute Werte der echten Parameter** auf.
 - **Encoder-Eingabe vom Controller** folgt wie an der Hardware der offenen
   Seite. Sie läuft über einen eigenen MIDI-Eingang des Plugins (Gerät direkt
   wählbar, Learn im Plugin) und nicht über Live, damit sie keine
-  Automationsspuren hinterlässt. Grundlage ist PR #93 („Panel MIDI").
+  Automationsspuren hinterlässt. Neu gebaut, ohne Code aus PR #93; siehe
+  „Panel MIDI" unten.
 - Tasten bleiben zusätzlich Host-Parameter (Configure), mit Antippen-Modus.
 - Test: `mdPanelHostParameterFirmwareTest` dreht einen Panel-Encoder und
   verlangt, dass der Track-Parameter genau um die Zahl der Rasten folgt.
 
 **Voraussetzung:** Der MIDI-Ausgang der Maschine für Parameter muss in ihren
 Global-Settings aktiv sein (Standard).
+
+## Panel MIDI (2026-10-27)
+
+Ein MIDI-Controller spielt das Front-Panel direkt: Tasten, Trigs, Encoder-Push
+und die Endlos-Encoder, die wie an der Hardware der offenen Seite folgen.
+Nichts davon ist ein Host-Parameter, also entstehen keine Automationsspuren;
+aufgezeichnet werden nur die echten Parameter, die die Firmware meldet.
+
+**Eingang:** ein eigener **Panel-Kanal** (Settings → Panel MIDI, Standard Off).
+Jede Kanalnachricht auf diesem Kanal gehört dem Panel und erreicht weder
+MIDI-Learn noch Program-Change-Routing noch die Maschine. Quellen sind die
+Track-MIDI des Hosts und der physische Eingang aus den MIDI-Settings
+(`MidiPorts`). In Live sieht das Plugin Track-MIDI nur, wenn die Spur
+scharf geschaltet ist oder Monitoring auf „In" steht.
+
+**Learn:** Rechtsklick auf eine Taste oder einen Encoder im Panel → „MIDI Learn".
+Die nächste Note-On oder CC auf dem Panel-Kanal wird gebunden. Bei einem Encoder
+bindet ein CC das Drehen, eine Note den Push-Taster. Jede Note/CC steuert genau
+ein Control, jedes Control hat höchstens eine Note/CC. Gespeichert wird pro
+Maschine in der Plugin-Konfiguration (`panelMidiMap`, Textformat, z. B.
+`button Play note 60`, `encoder DataEntryA cc 16`).
+
+**Encoder-Formate:** Zweierkomplement (Live „Relative (2's Comp.)"),
+Offset 64, Vorzeichen-Bit, sowie „Absolute knob" für Potis mit Anschlag.
+
+**Tasten:** immer momentan: Note-On/CC ≥ 64 drückt, Note-Off/Velocity 0/CC < 64
+lässt los. Der Antipp-Modus gilt nur für Host-Parameter.
+
+**Architektur:**
+- `pluginLib::Processor::consumeMidiInput` (virtuell) wird als Erstes in
+  `addMidiEvent` für Host- und Physical-Quellen gefragt (nie für SysEx).
+- `Controller::consumePanelMidi` prüft nur den Kanal (atomar) und legt die drei
+  Bytes in eine lock-freie Queue. Übersetzt wird auf dem Audio-Thread in
+  `drainPanelInput`, dem einzigen Konsumenten: `md::PanelMidiTranslator`
+  (JUCE-frei, `mdLib/mdpanelmidimap.*`) erzeugt Aktionen für `PanelHostInput`
+  (Quelle `PanelMidi`).
+- Map-Änderungen gehen als Kopie per Queue zum Audio-Thread, Learn-Anfragen
+  als Atomic, gelernte Bindungen per Queue zurück an den Message-Thread, der
+  speichert und `onPanelMidiMapChanged` auslöst.
+- `PanelHostInput::turn` liefert Encoder-Rasten; pro Drain höchstens 64 Rasten
+  je Encoder, der Rest folgt im nächsten Block (das Panel-FIFO der Maschine
+  verwirft Rasten, die nicht passen). Panel-MIDI wird wie Host-Eingaben
+  während des Boots verworfen (Startup-Menü).
+- Der alte Encoder-Positionspfad (Recentring, Seite 101) ist entfernt; Seite
+  101 bleibt reserviert.
+
+**Tests:** `mdPanelMidiMapTest` (Kanalfilter, Formate, Learn, Textformat),
+`mdPanelHostInputTest` (Rasten, Aufteilung, Reihenfolge, Boot-Sperre,
+Überlauf), `mdPanelHostParameterFirmwareTest` (CC-Burst bewegt den
+Track-Parameter um genau 6, Note drückt RECORD, MIDI-RX der Maschine bleibt
+unverändert, andere Kanäle kommen weiter an).

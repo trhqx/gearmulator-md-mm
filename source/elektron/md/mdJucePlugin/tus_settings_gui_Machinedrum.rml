@@ -27,6 +27,161 @@
 	<label>On: every change of a panel button parameter is one short press. Use this when mapping notes in Ableton Live, which toggles the parameter on each note. Off: 1 holds the button and 0 releases it, for momentary CC buttons, held trigs and parameter locks. Clicks in the plugin window always behave like the hardware.</label>
 
 	<settingsspacer1/>
+	<h1>Panel MIDI</h1>
+	<settingsspacer1/>
+	<label>A MIDI controller on this channel plays the front panel: keys, trigs and the endless encoders, page by page like the hardware. Nothing on this channel reaches the machine, and encoder movement never shows up in host automation; the machine reports the parameters it changes instead. Right-click a key or encoder on the panel to learn a control. Input comes from the track's MIDI and from the MIDI input chosen on the MIDI page.</label>
+	<settingsspacer1/>
+	<label>Channel</label>
+		<table class="settings-table">
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btPanelMidiChannelOff" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>Off</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel1" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>1</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel2" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>2</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel3" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>3</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel4" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>4</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel5" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>5</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel6" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>6</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel7" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>7</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel8" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>8</label>
+					</div>
+				</td>
+			</tr>
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btPanelMidiChannel9" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>9</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel10" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>10</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel11" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>11</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel12" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>12</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel13" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>13</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel14" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>14</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel15" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>15</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiChannel16" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>16</label>
+					</div>
+				</td>
+			</tr>
+		</table>
+	<settingsspacer1/>
+	<label id="lbPanelMidiChannelInfo"></label>
+	<settingsspacer1/>
+	<label>Encoder CC format</label>
+		<table class="settings-table">
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btPanelMidiEncodingTwosComplement" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>Relative (two's complement)</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiEncodingBinaryOffset" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>Relative (offset 64)</label>
+					</div>
+				</td>
+			</tr>
+			<tr class="settings-tr">
+				<td class="settings-td">
+					<div id="btPanelMidiEncodingSignMagnitude" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>Relative (signed bit)</label>
+					</div>
+				</td>
+				<td class="settings-td">
+					<div id="btPanelMidiEncodingAbsolute" class="settings-checkboxwithlabel">
+						<button id="button" class="settings-checkbox"/>
+						<label>Absolute knob</label>
+					</div>
+				</td>
+			</tr>
+		</table>
+	<settingsspacer1/>
+	<div class="settings-panelmidi-actions">
+		<button id="btPanelMidiForgetAll" class="button">Forget All Panel MIDI Mappings</button>
+	</div>
+	<settingsspacer1/>
+	<label id="lbPanelMidiMappingCount"></label>
+
+	<settingsspacer1/>
 	<h1>RAM Recording</h1>
 	<settingsspacer1/>
 	<div id="btRamRecordingComplete" class="settings-checkboxwithlabel">

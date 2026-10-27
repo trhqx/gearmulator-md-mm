@@ -878,6 +878,12 @@ namespace mdJucePlugin
 		}
 	}
 
+	bool AudioPluginAudioProcessor::consumeMidiInput(const synthLib::SMidiEvent& _event)
+	{
+		// The controller is created in the constructor, before any MIDI can arrive.
+		return hasController() && static_cast<Controller&>(getController()).consumePanelMidi(_event);
+	}
+
 	pluginLib::Controller* AudioPluginAudioProcessor::createController()
 	{
 		return new mdJucePlugin::Controller(*this);

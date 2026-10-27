@@ -124,6 +124,17 @@ namespace mdAutomationTest
 			}
 		}
 
+		// One block whose host MIDI input holds _messages, all at the block start.
+		void processMidi(const std::vector<juce::MidiMessage>& _messages)
+		{
+			require(prepared, "attempted to process an unprepared instance");
+			audio.clear();
+			midi.clear();
+			for(const auto& message : _messages)
+				midi.addEvent(message, 0);
+			audioProcessor.processBlock(audio, midi);
+		}
+
 		bool synchronize(const int _maximumBlocks = 12000)
 		{
 			for(int block = 0; block < _maximumBlocks; ++block)

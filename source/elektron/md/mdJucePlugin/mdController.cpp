@@ -40,8 +40,13 @@ namespace mdJucePlugin
 			? "parameterDescriptions_mm.json" : "parameterDescriptions_md.json")
 		, m_model(_p.getModel())
 		, m_panelInput(_p.getModel())
+		, m_panelMidiTranslator(_p.getModel())
 	{
 		setHostButtonsTap(_p.getConfig().getBoolValue(g_hostButtonsTapConfigKey, g_hostButtonsTapDefault));
+		m_panelMidiMap = md::PanelMidiMap::fromText(
+			_p.getConfig().getValue(g_panelMidiMapConfigKey).toStdString(), m_model);
+		m_panelMidiTranslator.setMap(m_panelMidiMap);
+		m_panelMidiChannel.store(m_panelMidiMap.channel, std::memory_order_release);
 		registerParams(_p, [](const uint8_t _part, const bool _nonPartSensitive)
 		{
 			// The only global parameters are the front-panel controls.
@@ -141,10 +146,103 @@ namespace mdJucePlugin
 		const auto value = _pressed ? 1 : 0;
 		// Post first so the edge is ordered before any later change, even if the
 		// parameter's own (asynchronous) value notification coalesces press and release.
-		m_panelInput.post(_address.page, _address.index, value, PanelHostInput::Delivery::Mapped,
+		m_panelInput.post(_address.page, _address.index, value,
 			PanelHostInput::Source::Editor);
 		for(auto* const parameter : findSynthParam(0, _address.page, _address.index))
 			parameter->setUnnormalizedValueNotifyingHost(value, pluginLib::Parameter::Origin::Ui);
+	}
+
+	bool Controller::consumePanelMidi(const synthLib::SMidiEvent& _event)
+	{
+		if(!md::isPanelMidiMessage(m_panelMidiChannel.load(std::memory_order_acquire), _event.a))
+			return false;
+		// The panel channel belongs to the panel even when its queue is full.
+		(void)m_panelMidiIngress.tryPush({_event.a, _event.b, _event.c});
+		m_consumedPanelMidi.fetch_add(1, std::memory_order_acq_rel);
+		return true;
+	}
+
+	void Controller::setPanelMidiMap(const md::PanelMidiMap& _map)
+	{
+		m_panelMidiMap = _map;
+		m_panelMidiChannel.store(_map.channel, std::memory_order_release);
+		auto& config = static_cast<AudioPluginAudioProcessor&>(getProcessor()).getConfig();
+		config.setValue(g_panelMidiMapConfigKey, juce::String(_map.toText()));
+		config.saveIfNeeded();
+		publishPanelMidiMap();
+		onPanelMidiMapChanged();
+	}
+
+	void Controller::learnPanelMidi(const md::PanelMidiTarget _target)
+	{
+		if(!_target.isSupported(m_model))
+			return;
+		m_panelMidiLearning = true;
+		m_panelMidiLearnRequest.store(static_cast<uint16_t>(static_cast<uint16_t>(_target.type) << 8 | _target.index),
+			std::memory_order_release);
+	}
+
+	void Controller::cancelPanelMidiLearn()
+	{
+		m_panelMidiLearnRequest.store(g_cancelPanelMidiLearn, std::memory_order_release);
+		if(!m_panelMidiLearning)
+			return;
+		m_panelMidiLearning = false;
+		onPanelMidiMapChanged();
+	}
+
+	void Controller::publishPanelMidiMap()
+	{
+		m_panelMidiMapPending = !m_panelMidiMapUpdates.tryPush(m_panelMidiMap);
+	}
+
+	void Controller::servicePanelMidi()
+	{
+		md::PanelMidiTranslator::Binding learned;
+		bool changed = false;
+		while(m_panelMidiLearned.tryPop(learned))
+		{
+			changed |= m_panelMidiMap.bind(learned.trigger, learned.target, m_model);
+			m_panelMidiLearning = false;
+		}
+		if(changed)
+			setPanelMidiMap(m_panelMidiMap);
+		else if(m_panelMidiMapPending)
+			publishPanelMidiMap();
+	}
+
+	void Controller::translatePanelMidi()
+	{
+		md::PanelMidiMap map;
+		bool haveMap = false;
+		while(m_panelMidiMapUpdates.tryPop(map))
+			haveMap = true;
+		if(haveMap)
+			m_panelMidiTranslator.setMap(map);
+		const auto learn = m_panelMidiLearnRequest.exchange(g_noPanelMidiLearn, std::memory_order_acq_rel);
+		if(learn == g_cancelPanelMidiLearn)
+			m_panelMidiTranslator.cancelLearn();
+		else if(learn != g_noPanelMidiLearn)
+			m_panelMidiTranslator.learn({static_cast<md::PanelMidiTarget::Type>(learn >> 8),
+				static_cast<uint8_t>(learn & 0xff)});
+
+		namespace pp = md::panelParameters;
+		using Type = md::PanelMidiTarget::Type;
+		PanelMidiMessage message;
+		for(size_t i = 0; i < 512 && m_panelMidiIngress.tryPop(message); ++i)
+		{
+			const auto result = m_panelMidiTranslator.translate(message.status, message.data1, message.data2);
+			if(result.learned && !m_panelMidiLearned.tryPush(*result.learned))
+				m_panelMidiTranslator.learn(result.learned->target);	// retry with the next message
+			if(!result.action)
+				continue;
+			const auto& [target, value] = *result.action;
+			if(target.type == Type::Encoder)
+				m_panelInput.turn(static_cast<md::PanelEncoder>(target.index), value, PanelHostInput::Source::PanelMidi);
+			else
+				m_panelInput.post(target.type == Type::Button ? pp::ButtonPage : pp::EncoderPushPage, target.index,
+					value, PanelHostInput::Source::PanelMidi);
+		}
 	}
 
 	void Controller::drainPanelInput()
@@ -153,6 +251,7 @@ namespace mdJucePlugin
 		plugin.withDeviceLocked([this, &plugin](synthLib::Device* const _device)
 		{
 			auto* const device = dynamic_cast<md::Device*>(_device);
+			translatePanelMidi();
 			if(device == nullptr)
 			{
 				m_panelInput.discard();
@@ -420,6 +519,7 @@ namespace mdJucePlugin
 			juce::MessageManager::getInstanceWithoutCreating();
 		if(messageManager != nullptr && messageManager->isThisTheMessageThread())
 		{
+			servicePanelMidi();
 			for(const auto& [address, parameters] : getExposedParameters())
 			{
 				(void)address;

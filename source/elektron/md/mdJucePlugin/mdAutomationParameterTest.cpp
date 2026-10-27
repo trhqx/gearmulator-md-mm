@@ -120,18 +120,8 @@ namespace
 		require(_description->isDiscrete, _what + " must be discrete");
 		require(_description->isBool == _isBool, _what + " has the wrong bool flag");
 		require(_description->range.getStart() == 0, _what + " must start at 0");
-		if(_isBool)
-		{
-			require(_description->range.getEnd() == 1, _what + " must be 0/1");
-			require(_description->defaultValue == 0, _what + " must default to released");
-		}
-		else
-		{
-			require(_description->range.getEnd() == md::PanelGestureMapper::g_encoderMaximum,
-				_what + " must span one relative tick per step");
-			require(_description->defaultValue == md::PanelGestureMapper::g_encoderCentre,
-				_what + " must default to the centre");
-		}
+		require(_description->range.getEnd() == 1, _what + " must be 0/1");
+		require(_description->defaultValue == 0, _what + " must default to released");
 		require(_description->displayName.rfind("Panel ", 0) != 0,
 			_what + " display name must not repeat the Panel prefix");
 	}

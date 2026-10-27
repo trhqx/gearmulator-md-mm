@@ -14,7 +14,10 @@
 #include "mdLcdInteractionModel.h"
 #include "mdPanelAffordances.h"
 #include "mdLib/mdfrontpanel.h"
+#include "mdLib/mdpanelmidimap.h"
 #include "mdLib/mdsyseximport.h"
+
+#include "baseLib/event.h"
 
 #include "juce_gui_basics/juce_gui_basics.h"
 
@@ -35,6 +38,7 @@ namespace juceRmlUi
 	class ElemButton;
 	class ElemCanvas;
 	class ElemKnob;
+	class Menu;
 }
 
 namespace md
@@ -85,6 +89,9 @@ namespace mdJucePlugin
 		bool isUserSysexTransferActive() const;
 		bool canCancelUserSysexTransfer() const;
 		std::weak_ptr<void> getLifetimeToken() const { return m_lifetimeToken; }
+		// Adds learn/forget entries when the context menu was opened on a panel
+		// control; called while the plugin's standard context menu is built.
+		void addPanelMidiMenuEntries(juceRmlUi::Menu& _menu);
 
 		static constexpr int g_panelSpeedPercents[] = {50, 75, 100, 150, 200, 300};
 
@@ -105,6 +112,8 @@ namespace mdJucePlugin
 		void clearLcdHover();
 		void cancelLcdGesture();
 		void emitEncoderSteps(md::PanelEncoder _encoder, int _steps) const;
+		void addPanelMidiTarget(Rml::Element* _element, md::PanelMidiTarget _target);
+		void updatePanelMidiLearnHighlight();
 		void createButtons();
 		void createPanelAffordances();
 		void bindPanelTarget(const char* _id, md::PanelControl _control);
@@ -218,6 +227,11 @@ namespace mdJucePlugin
 			m_monomachineTrigModeTarget;
 
 		std::array<juceRmlUi::ElemKnob*, 8> m_encoders{};
+		// Panel controls a MIDI controller can learn via their context menu.
+		std::vector<std::pair<Rml::Element*, md::PanelMidiTarget>> m_panelMidiTargets;
+		Rml::Element* m_panelMidiLearnElement = nullptr;
+		std::optional<std::pair<Rml::Element*, md::PanelMidiTarget>> m_contextPanelMidiTarget;
+		baseLib::EventListener<> m_onPanelMidiMapChanged;
 		std::array<float, 8> m_encLast{};
 		std::array<float, 8> m_encAccum{};
 		juceRmlUi::ElemKnob* m_levelEncoder = nullptr;

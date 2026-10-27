@@ -67,6 +67,8 @@ namespace mdJucePlugin
 	{
 		jucePluginEditorLib::PluginEditorState::initContextMenu(_menu);
 		auto& processor = static_cast<AudioPluginAudioProcessor&>(m_processor);
+		if(auto* const editor = dynamic_cast<Editor*>(getEditor()))
+			editor->addPanelMidiMenuEntries(_menu);
 		if(processor.getModel() == md::MachineModel::Machinedrum)
 		{
 			const bool available = processor.isRamRecordingModeAvailable();

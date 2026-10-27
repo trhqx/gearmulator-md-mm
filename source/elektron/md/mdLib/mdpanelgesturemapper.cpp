@@ -63,72 +63,17 @@ namespace md
 		return true;
 	}
 
-	bool PanelGestureMapper::setEncoderPosition(const PanelEncoder _encoder, const uint8_t _position,
-		const double _nowMilliseconds, Output& _output)
+	int PanelGestureMapper::turnEncoder(const PanelEncoder _encoder, const int _steps, Output& _output) const
 	{
-		const auto index = static_cast<size_t>(_encoder);
 		const auto command = panelEncoderCommand(m_model, _encoder);
-		if(index >= g_encoderCount || !command)
-			return false;
-
-		auto& state = m_encoders[index];
-		const auto position = std::min(_position, g_encoderMaximum);
-		if(position == state.position)
-			return false;
-
-		const auto delta = static_cast<int>(position) - static_cast<int>(state.position);
-		const auto idle = !state.touched
-			|| _nowMilliseconds - state.lastChangeMilliseconds >= g_recentreIdleMilliseconds;
-		const auto isRecentre = position == g_encoderCentre && std::abs(delta) > 1 && idle;
-
-		state.position = position;
-		state.touched = true;
-		state.lastChangeMilliseconds = _nowMilliseconds;
-		if(isRecentre)
-			return false;
-
-		const PanelEvent tick{*command, static_cast<uint8_t>(delta > 0 ? 0x01 : 0xff)};
-		const auto count = std::min(std::abs(delta), g_encoderBurstCap);
+		if(!command || _steps == 0)
+			return 0;
+		const auto room = static_cast<int>(_output.events.size() - _output.count);
+		const auto count = std::min(std::abs(_steps), room);
+		const PanelEvent tick{*command, static_cast<uint8_t>(_steps > 0 ? 0x01 : 0xff)};
 		for(int i = 0; i < count; ++i)
 			append(_output, tick);
-		return true;
-	}
-
-	void PanelGestureMapper::rebaseEncoder(const PanelEncoder _encoder, const uint8_t _position)
-	{
-		const auto index = static_cast<size_t>(_encoder);
-		if(index >= g_encoderCount)
-			return;
-		m_encoders[index].position = std::min(_position, g_encoderMaximum);
-	}
-
-	void PanelGestureMapper::adoptEncoderPosition(const PanelEncoder _encoder, const uint8_t _position,
-		const double _nowMilliseconds)
-	{
-		const auto index = static_cast<size_t>(_encoder);
-		if(index >= g_encoderCount)
-			return;
-		auto& state = m_encoders[index];
-		const auto position = std::min(_position, g_encoderMaximum);
-		if(position == state.position)
-			return;
-		state.position = position;
-		state.touched = true;
-		state.lastChangeMilliseconds = _nowMilliseconds;
-	}
-
-	std::optional<uint8_t> PanelGestureMapper::recentreTarget(const PanelEncoder _encoder,
-		const double _nowMilliseconds) const
-	{
-		const auto index = static_cast<size_t>(_encoder);
-		if(index >= g_encoderCount || !supportsEncoder(m_model, _encoder))
-			return std::nullopt;
-		const auto& state = m_encoders[index];
-		if(!state.touched || (state.position >= g_recentreBandLow && state.position <= g_recentreBandHigh))
-			return std::nullopt;
-		if(_nowMilliseconds - state.lastChangeMilliseconds < g_recentreIdleMilliseconds)
-			return std::nullopt;
-		return g_encoderCentre;
+		return _steps > 0 ? count : -count;
 	}
 
 	void PanelGestureMapper::releaseAll(Output& _output)
@@ -148,7 +93,6 @@ namespace md
 		m_rows.reset();
 		m_heldButtons.reset();
 		m_heldPushes.reset();
-		m_encoders = {};
 	}
 
 	void PanelGestureMapper::append(Output& _output, const PanelEvent _event)

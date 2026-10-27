@@ -150,6 +150,79 @@ namespace
 			"release after a state load reached the panel");
 	}
 
+	uint64_t midiRxConsumed(Harness& _harness)
+	{
+		uint64_t count = 0;
+		_harness.processor.getPlugin().withDeviceLocked([&count](synthLib::Device* const _device)
+		{
+			if(auto* const device = dynamic_cast<md::Device*>(_device))
+				count = device->getHardware().midiRxConsumedCount();
+		});
+		return count;
+	}
+
+	// A MIDI controller on the panel channel plays the front panel directly: it
+	// never reaches the machine's MIDI input and never shows up as a host parameter.
+	void verifyPanelMidi(Harness& _harness, const md::MachineModel _model)
+	{
+		constexpr int channel = 16;	// one-based, as in juce::MidiMessage
+		auto& controller = _harness.controller;
+		require(controller.getAutomationBaseChannel() + 6 < channel - 1,
+			"test premise: the panel channel is outside the machine's channels");
+		md::PanelMidiMap map;
+		map.channel = channel - 1;
+		map.encoding = md::PanelMidiEncoding::TwosComplement;
+		require(map.bind(md::PanelMidiTrigger::controlChange(16),
+			md::PanelMidiTarget::encoder(md::PanelEncoder::DataEntryA), _model), "bind encoder");
+		require(map.bind(md::PanelMidiTrigger::note(60),
+			md::PanelMidiTarget::button(md::PanelControl::Record), _model), "bind Record");
+		controller.setPanelMidiMap(map);
+		_harness.process(4);
+
+		auto* const target = controller.getParameter(
+			_model == md::MachineModel::Monomachine ? "SynthesisA" : "MachineParameter1", 0);
+		require(target != nullptr, "track 1 parameter 1 is missing");
+		const auto before = target->getUnnormalizedValue();
+		const auto rxBefore = midiRxConsumed(_harness);
+		const auto consumedBefore = controller.getConsumedPanelMidiCount();
+		const uint8_t step = before < 100 ? 3 : 125;	// +3 or -3
+		_harness.processMidi({juce::MidiMessage::controllerEvent(channel, 16, step),
+			juce::MidiMessage::controllerEvent(channel, 16, step)});
+		_harness.process(200);
+		const auto after = target->getUnnormalizedValue();
+		require(std::abs(after - before) == 6, "panel MIDI did not turn the encoder by six steps ("
+			+ std::to_string(before) + " -> " + std::to_string(after) + ")");
+
+		if(_model == md::MachineModel::Machinedrum)
+		{
+			const auto initial = frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record);
+			_harness.processMidi({juce::MidiMessage::noteOn(channel, 60, static_cast<uint8_t>(100))});
+			_harness.process(16);
+			_harness.processMidi({juce::MidiMessage::noteOff(channel, 60)});
+			_harness.process(64);
+			require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) != initial,
+				"a panel MIDI note did not press RECORD");
+			_harness.processMidi({juce::MidiMessage::noteOn(channel, 60, static_cast<uint8_t>(100)),
+				juce::MidiMessage::noteOff(channel, 60)});
+			_harness.process(64);
+			require(frontPanel(_harness).getModeLed(md::FrontPanel::ModeLed::Record) == initial,
+				"a second panel MIDI note did not press RECORD again");
+		}
+
+		require(midiRxConsumed(_harness) == rxBefore, "panel MIDI reached the machine's MIDI input");
+		require(controller.getConsumedPanelMidiCount() > consumedBefore, "panel MIDI was not consumed");
+		require(controller.getParameter("PanelEncoderDataEntryA", 0) == nullptr, "encoders became host parameters");
+
+		// Other channels still reach the machine.
+		_harness.processMidi({juce::MidiMessage::controllerEvent(controller.getAutomationBaseChannel() + 1, 120, 0)});
+		_harness.process(32);
+		require(midiRxConsumed(_harness) > rxBefore, "MIDI on the machine's channel no longer reached it");
+
+		map.channel = md::PanelMidiMap::g_off;
+		controller.setPanelMidiMap(map);
+		_harness.process(4);
+	}
+
 	std::vector<pluginLib::Parameter*> panelParameters(Harness& _harness)
 	{
 		std::vector<pluginLib::Parameter*> result;
@@ -188,6 +261,7 @@ namespace
 			verifyTapMode(harness);
 		}
 		verifyEncoderTurnRecordsTrackParameter(harness, _model);
+		verifyPanelMidi(harness, _model);
 		verifyStateLoadReleasesHeldControls(harness);
 
 		std::cout << "mdPanelHostParameterFirmwareTest: " << modelName(_model) << " PASS\n";

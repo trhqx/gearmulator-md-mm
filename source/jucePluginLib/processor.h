@@ -167,6 +167,10 @@ namespace pluginLib
 		const Properties& getProperties() const { return m_properties; }
 
 		virtual void processBpm(float _bpm) {}
+		// Host and physical channel messages are offered here before MIDI Learn,
+		// program change routing and the device see them. Returning true consumes the
+		// event. Called on the audio thread and on the MIDI input thread.
+		virtual bool consumeMidiInput(const synthLib::SMidiEvent&) { return false; }
 
 		bool rebootDevice();
 

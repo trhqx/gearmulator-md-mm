@@ -13,6 +13,8 @@ namespace md::panelParameters
 	// above the firmware track pages, which may still grow. The parameter index is
 	// the PanelControl / PanelEncoder value. Never renumber either.
 	constexpr uint8_t ButtonPage = 100;
+	// Retired: encoders are not host parameters (their recentring polluted host
+	// automation). Kept reserved so the page number is never reused.
 	constexpr uint8_t EncoderPage = 101;
 	constexpr uint8_t EncoderPushPage = 102;
 

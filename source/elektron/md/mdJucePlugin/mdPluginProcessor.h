@@ -61,6 +61,7 @@ namespace mdJucePlugin
 		void getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const override;
 
 	    pluginLib::Controller* createController() override;
+		bool consumeMidiInput(const synthLib::SMidiEvent& _event) override;
 		void saveChunkData(baseLib::BinaryStream& _stream) override;
 		void loadChunkData(baseLib::ChunkReader& _reader) override;
 		bool loadCustomData(const std::vector<uint8_t>& _sourceBuffer) override;

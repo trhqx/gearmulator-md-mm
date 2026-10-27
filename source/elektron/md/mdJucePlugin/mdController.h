@@ -3,6 +3,7 @@
 #include "jucePluginLib/controller.h"
 #include "mdLib/mdautomation.h"
 #include "mdLib/mdautomationsync.h"
+#include "mdLib/mdpanelmidimap.h"
 #include "mdLib/mdtypes.h"
 #include "mdPanelHostInput.h"
 #include "mdRealtimeQueue.h"
@@ -68,6 +69,22 @@ namespace mdJucePlugin
 		// Editor input (message thread). Buttons and encoder switches go through the
 		// panel parameters so the mapper owns the scan rows and hosts can learn them.
 		void setPanelControlFromUi(md::panelParameters::Address _address, bool _pressed);
+		// Panel MIDI: a controller on a dedicated channel plays the front panel
+		// (doc/mdmm_panel_host_parameters.md). Any thread; true consumes the event.
+		bool consumePanelMidi(const synthLib::SMidiEvent& _event);
+		// Message thread. The map is persisted per machine.
+		static constexpr const char* g_panelMidiMapConfigKey = "panelMidiMap";
+		const md::PanelMidiMap& getPanelMidiMap() const { return m_panelMidiMap; }
+		void setPanelMidiMap(const md::PanelMidiMap& _map);
+		void learnPanelMidi(md::PanelMidiTarget _target);
+		void cancelPanelMidiLearn();
+		bool isPanelMidiLearning() const { return m_panelMidiLearning; }
+		// Fired on the message thread after a learn, a cancelled learn or another change.
+		baseLib::Event<> onPanelMidiMapChanged;
+		uint64_t getConsumedPanelMidiCount() const
+		{
+			return m_consumedPanelMidi.load(std::memory_order_acquire);
+		}
 		// Host parameters that map to firmware CCs; panel controls are excluded.
 		size_t getAutomationParameterCount() const { return m_automationSlots.size(); }
 		uint64_t getTransmittedAutomationChangeCount() const
@@ -170,12 +187,37 @@ namespace mdJucePlugin
 		void sendMissingSynchronizationRequests();
 		void sendSynchronizationRequest(const pluginLib::SysEx& _message) const;
 		void drainPanelInput();
+		void translatePanelMidi();
+		void servicePanelMidi();
+		void publishPanelMidiMap();
 		void resetPanelParameters();
 		static uint64_t milliseconds();
 
 		const md::MachineModel m_model;
 		PanelHostInput m_panelInput;
 		std::atomic<uint64_t> m_deliveredPanelEvents{0};
+
+		struct PanelMidiMessage
+		{
+			uint8_t status = 0;
+			uint8_t data1 = 0;
+			uint8_t data2 = 0;
+		};
+		// Panel MIDI ingress (any thread) and the map/learn hand-over to the audio
+		// thread, which owns the translator.
+		static constexpr uint16_t g_noPanelMidiLearn = 0;
+		static constexpr uint16_t g_cancelPanelMidiLearn = 0xffff;
+		std::atomic<int8_t> m_panelMidiChannel{md::PanelMidiMap::g_off};
+		std::atomic<uint64_t> m_consumedPanelMidi{0};
+		RealtimeQueue<PanelMidiMessage, 512> m_panelMidiIngress;
+		RealtimeQueue<md::PanelMidiMap, 4> m_panelMidiMapUpdates;
+		std::atomic<uint16_t> m_panelMidiLearnRequest{g_noPanelMidiLearn};
+		RealtimeQueue<md::PanelMidiTranslator::Binding, 16> m_panelMidiLearned;
+		md::PanelMidiTranslator m_panelMidiTranslator;	// audio thread
+		// Message thread.
+		md::PanelMidiMap m_panelMidiMap;
+		bool m_panelMidiMapPending = false;
+		bool m_panelMidiLearning = false;
 		std::atomic<uint8_t> m_baseChannel{0x7f};
 		std::atomic<bool> m_haveGlobal{false};
 		std::atomic<bool> m_haveKit{false};

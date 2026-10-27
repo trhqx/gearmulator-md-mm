@@ -16,8 +16,6 @@ namespace
 	using mdJucePlugin::PanelHostInput;
 	namespace pp = md::panelParameters;
 
-	constexpr double g_idle = md::PanelGestureMapper::g_recentreIdleMilliseconds;
-
 	void expect(const bool _condition, const char* const _message)
 	{
 		if(_condition)
@@ -79,8 +77,9 @@ namespace
 	{
 		PanelHostInput input(MachineModel::Monomachine);
 		expect(!input.post(0, 0, 1), "track parameter accepted as panel input");
-		expect(!input.post(pp::EncoderPage, encoder(PanelEncoder::SoundSelection), 70),
-			"unsupported MM encoder accepted");
+		expect(!input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 1),
+			"the retired encoder page accepted input");
+		expect(!input.turn(PanelEncoder::SoundSelection, 1), "unsupported MM encoder accepted");
 		expect(!input.post(pp::ButtonPage, 200, 1), "out-of-range button accepted");
 	}
 
@@ -94,16 +93,11 @@ namespace
 		Machine machine;
 		machine.ready = false;
 		input.post(pp::ButtonPage, button(PanelControl::Record), 1);
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 70);
 		expect(drain(input, machine).empty(), "host input reached a booting machine");
 
 		machine.ready = true;
 		input.post(pp::ButtonPage, button(PanelControl::Record), 0);
 		expect(drain(input, machine).empty(), "release of a withheld press reached the panel");
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryA), 71);
-		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryA);
-		expect(drain(input, machine) == std::vector<PanelEvent>{{command, 0x01}},
-			"encoder moved while booting was not adopted as the new base");
 	}
 
 	void checkEditorInputBeforeFirmwareReadinessIsDelivered()
@@ -113,15 +107,13 @@ namespace
 		PanelHostInput input(model);
 		Machine machine;
 		machine.ready = false;
-		input.post(pp::ButtonPage, button(PanelControl::Function), 1, PanelHostInput::Delivery::Mapped,
-			PanelHostInput::Source::Editor);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, PanelHostInput::Source::Editor);
 		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
 			"an editor press during boot did not reach the panel");
 		// The parameter's own notification echoes the value as host input.
 		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
 		expect(drain(input, machine).empty(), "host echo of an editor press produced events");
-		input.post(pp::ButtonPage, button(PanelControl::Function), 0, PanelHostInput::Delivery::Mapped,
-			PanelHostInput::Source::Editor);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, PanelHostInput::Source::Editor);
 		const auto release = drain(input, machine);
 		expect(release.size() == 1 && release[0].argument == 0, "editor release during boot was lost");
 	}
@@ -137,25 +129,6 @@ namespace
 		machine.epoch = 1;
 		input.post(pp::ButtonPage, button(PanelControl::Play), 0);
 		expect(drain(input, machine).empty(), "input without a device reached a later device");
-	}
-
-	void checkEditorTurnsOnlyMoveTheBase()
-	{
-		// The editor sends its encoder ticks itself and moves the host parameter
-		// only so a host can learn it; the mapper must not send those ticks again.
-		const auto model = MachineModel::Machinedrum;
-		PanelHostInput input(model);
-		Machine machine;
-		const auto knob = encoder(PanelEncoder::DataEntryE);
-		expect(input.post(pp::EncoderPage, knob, 70, PanelHostInput::Delivery::AlreadyDelivered),
-			"editor encoder post rejected");
-		expect(drain(input, machine).empty(), "editor-delivered ticks were sent again");
-		input.post(pp::EncoderPage, knob, 70);
-		expect(drain(input, machine).empty(), "host echo of the editor value produced ticks");
-		input.post(pp::EncoderPage, knob, 71);
-		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryE);
-		expect(drain(input, machine) == std::vector<PanelEvent>{{command, 0x01}},
-			"a later host turn did not continue from the editor position");
 	}
 
 	// Ableton Live toggles a note-mapped on/off parameter on every note-on and
@@ -193,16 +166,14 @@ namespace
 		PanelHostInput input(model);
 		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
 		Machine machine;
-		input.post(pp::ButtonPage, button(PanelControl::Function), 1, PanelHostInput::Delivery::Mapped,
-			PanelHostInput::Source::Editor);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, PanelHostInput::Source::Editor);
 		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
 			"editor press in tap mode");
 		// The host echoes the editor's own notification back as host input.
 		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
 		machine.now += 10 * PanelHostInput::g_tapMilliseconds;
 		expect(drain(input, machine).empty(), "an editor hold was released by the tap timer");
-		input.post(pp::ButtonPage, button(PanelControl::Function), 0, PanelHostInput::Delivery::Mapped,
-			PanelHostInput::Source::Editor);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, PanelHostInput::Source::Editor);
 		input.post(pp::ButtonPage, button(PanelControl::Function), 0);
 		const auto released = drain(input, machine);
 		expect(released.size() == 1 && released[0].argument == 0,
@@ -262,58 +233,149 @@ namespace
 		PanelHostInput input(model);
 		Machine machine;
 		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryB), 90);
 		(void)drain(input, machine);
 		input.requestReset();
 		const auto released = drain(input, machine);
 		expect(released.size() == 1 && released[0].argument == 0, "reset did not release the held button");
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryB), 65);
-		const auto command = *md::panelEncoderCommand(model, PanelEncoder::DataEntryB);
-		expect(drain(input, machine) == std::vector<PanelEvent>{{command, 0x01}},
-			"reset did not return the encoder base to the centre");
 	}
 
-	void checkRecentreRequests()
+	PanelEvent tick(const MachineModel _model, const PanelEncoder _encoder, const bool _up)
+	{
+		return {*md::panelEncoderCommand(_model, _encoder), static_cast<uint8_t>(_up ? 0x01 : 0xff)};
+	}
+
+	std::vector<PanelEvent> ticks(const MachineModel _model, const PanelEncoder _encoder, const int _steps)
+	{
+		return std::vector<PanelEvent>(static_cast<size_t>(std::abs(_steps)), tick(_model, _encoder, _steps > 0));
+	}
+
+	void checkTurnsBecomeTicks()
+	{
+		for(const auto model : {MachineModel::Machinedrum, MachineModel::Monomachine})
+		{
+			PanelHostInput input(model);
+			Machine machine;
+			expect(input.turn(PanelEncoder::DataEntryA, 3), "turn rejected");
+			expect(input.turn(PanelEncoder::DataEntryA, -2), "turn rejected");
+			auto expected = ticks(model, PanelEncoder::DataEntryA, 3);
+			const auto down = ticks(model, PanelEncoder::DataEntryA, -2);
+			expected.insert(expected.end(), down.begin(), down.end());
+			expect(drain(input, machine) == expected, "turns did not become ticks in order");
+			expect(input.turn(PanelEncoder::Level, 0) && drain(input, machine).empty(), "zero steps emitted ticks");
+		}
+	}
+
+	void checkLongTurnsAreSpreadOverDrains()
+	{
+		// The machine's panel FIFO drops ticks that do not fit, so a fast controller
+		// burst is metered out instead of sent at once.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		constexpr int steps = 2 * PanelHostInput::g_maxTicksPerDrain + 8;
+		input.turn(PanelEncoder::DataEntryH, -steps);
+		expect(drain(input, machine) == ticks(model, PanelEncoder::DataEntryH, -PanelHostInput::g_maxTicksPerDrain),
+			"first drain exceeded the tick budget");
+		expect(drain(input, machine).size() == PanelHostInput::g_maxTicksPerDrain, "second drain");
+		expect(drain(input, machine) == ticks(model, PanelEncoder::DataEntryH, -8), "remainder was lost");
+		expect(drain(input, machine).empty(), "steps were sent twice");
+	}
+
+	void checkGestureOrderIsKept()
+	{
+		// FUNCTION held while turning selects a different parameter on the machine.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		using Source = PanelHostInput::Source;
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, Source::PanelMidi);
+		input.turn(PanelEncoder::DataEntryB, 2);
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, Source::PanelMidi);
+		const auto press = pressOf(model, PanelControl::Function);
+		const auto up = tick(model, PanelEncoder::DataEntryB, true);
+		expect(drain(input, machine) == std::vector<PanelEvent>{press, up, up, {press.command, 0}},
+			"press, turn and release were reordered");
+	}
+
+	void checkPanelMidiIsWithheldWhileBooting()
 	{
 		const auto model = MachineModel::Machinedrum;
 		PanelHostInput input(model);
 		Machine machine;
-		constexpr auto knob = PanelEncoder::DataEntryC;
-		const auto bit = 1u << encoder(knob);
-		input.post(pp::EncoderPage, encoder(knob), 100);
-		(void)drain(input, machine);
-		expect(input.takeRecentreRequests() == 0, "recentre requested while still turning");
-
-		machine.now += g_idle;
-		(void)drain(input, machine);
-		expect(input.takeRecentreRequests() == bit, "idle encoder outside the band was not recentred");
-		expect(input.takeRecentreRequests() == 0, "recentre request was not consumed");
-		machine.now += g_idle;
-		(void)drain(input, machine);
-		expect(input.takeRecentreRequests() == 0, "recentre requested twice before the echo arrived");
-
-		// The plugin publishes the centre to the host, which echoes it back.
-		input.post(pp::EncoderPage, encoder(knob), md::PanelGestureMapper::g_encoderCentre);
-		machine.now += 10.0;
-		expect(drain(input, machine).empty(), "recentre echo produced counter-ticks");
-		input.post(pp::EncoderPage, encoder(knob), 20);
-		machine.now += 10.0;
-		(void)drain(input, machine);
-		machine.now += g_idle;
-		(void)drain(input, machine);
-		expect(input.takeRecentreRequests() == bit, "a later turn could not be recentred again");
+		machine.ready = false;
+		using Source = PanelHostInput::Source;
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, Source::PanelMidi);
+		input.turn(PanelEncoder::DataEntryA, 5);
+		expect(drain(input, machine).empty(), "panel MIDI reached a booting machine");
+		machine.ready = true;
+		expect(drain(input, machine).empty(), "withheld panel MIDI was delivered later");
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, Source::PanelMidi);
+		expect(drain(input, machine).empty(), "release of a withheld press reached the panel");
 	}
 
-	void checkNoRecentreBeforeReadiness()
+	void checkPanelMidiIsMomentaryInTapMode()
 	{
-		PanelHostInput input(MachineModel::Machinedrum);
+		// A note gives a real release, so panel MIDI holds the key as long as the
+		// note, and it never changes what counts as a host duplicate.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		input.setHostButtonMode(PanelHostInput::ButtonMode::Tap);
 		Machine machine;
+		using Source = PanelHostInput::Source;
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1, Source::PanelMidi);
+		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
+			"panel MIDI press");
+		machine.now += 10 * PanelHostInput::g_tapMilliseconds;
+		expect(drain(input, machine).empty(), "a held note was released by the tap timer");
+		input.post(pp::ButtonPage, button(PanelControl::Function), 0, Source::PanelMidi);
+		const auto released = drain(input, machine);
+		expect(released.size() == 1 && released[0].argument == 0, "panel MIDI release");
+		input.post(pp::ButtonPage, button(PanelControl::Function), 1);
+		expect(drain(input, machine) == std::vector<PanelEvent>{pressOf(model, PanelControl::Function)},
+			"a host toggle after panel MIDI input was taken as a duplicate");
+	}
+
+	void checkTurnOverflowKeepsSteps()
+	{
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		constexpr int turns = static_cast<int>(PanelHostInput::g_queueCapacity) + 20;
+		for(int i = 0; i < turns; ++i)
+			input.turn(PanelEncoder::DataEntryC, 1);
+		size_t total = 0;
+		for(int i = 0; i < 16; ++i)
+			total += drain(input, machine).size();
+		expect(total == static_cast<size_t>(turns), "steps were lost on overflow");
+	}
+
+	void checkCarriedTicksWaitForReadiness()
+	{
+		// A project-state restore takes the firmware out of readiness without a
+		// new machine; the rest of a long turn waits instead of reaching it.
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		constexpr int budget = PanelHostInput::g_maxTicksPerDrain;
+		input.turn(PanelEncoder::DataEntryE, 3 * budget);
+		expect(drain(input, machine).size() == budget, "first part of a long turn");
 		machine.ready = false;
-		input.post(pp::EncoderPage, encoder(PanelEncoder::DataEntryD), 120);
+		expect(drain(input, machine).empty(), "carried ticks reached a machine that is not ready");
+		machine.ready = true;
+		expect(drain(input, machine).size() == budget, "carried ticks were lost while not ready");
+		expect(drain(input, machine).size() == budget, "last part of a long turn");
+		expect(drain(input, machine).empty(), "a long turn was sent twice");
+	}
+
+	void checkRebootDropsPendingTicks()
+	{
+		const auto model = MachineModel::Machinedrum;
+		PanelHostInput input(model);
+		Machine machine;
+		input.turn(PanelEncoder::DataEntryD, 3 * PanelHostInput::g_maxTicksPerDrain);
 		(void)drain(input, machine);
-		machine.now += 10 * g_idle;
-		(void)drain(input, machine);
-		expect(input.takeRecentreRequests() == 0, "recentre requested for a machine that is not ready");
+		++machine.epoch;
+		expect(drain(input, machine).empty(), "ticks for the old machine reached the new one");
 	}
 
 	void checkQueueOverflowKeepsFinalState()
@@ -353,15 +415,20 @@ int main()
 	checkHostInputBeforeFirmwareReadinessIsWithheld();
 	checkEditorInputBeforeFirmwareReadinessIsDelivered();
 	checkMissingDeviceDiscardsInput();
-	checkEditorTurnsOnlyMoveTheBase();
 	checkTapModeTurnsToggledValuesIntoPresses();
 	checkTapModeKeepsEditorMomentary();
 	checkTapModeAppliesToEncoderPushes();
 	checkTapModeIgnoresTogglesWhileBooting();
 	checkRebootForgetsHeldControls();
 	checkResetReleasesHeldControls();
-	checkRecentreRequests();
-	checkNoRecentreBeforeReadiness();
+	checkTurnsBecomeTicks();
+	checkLongTurnsAreSpreadOverDrains();
+	checkGestureOrderIsKept();
+	checkPanelMidiIsWithheldWhileBooting();
+	checkPanelMidiIsMomentaryInTapMode();
+	checkTurnOverflowKeepsSteps();
+	checkCarriedTicksWaitForReadiness();
+	checkRebootDropsPendingTicks();
 	checkQueueOverflowKeepsFinalState();
 	checkConcurrentProducers();
 	std::cout << "mdPanelHostInputTest passed\n";

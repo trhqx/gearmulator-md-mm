@@ -10,18 +10,22 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 
 namespace mdJucePlugin
 {
-	// Bridges front-panel host parameters to the PanelGestureMapper.
+	// Collects front-panel input from host parameters, the editor and panel MIDI
+	// and feeds it to the PanelGestureMapper.
 	//
 	// Hosts may deliver the same change on several threads (VST3: message thread and
-	// audio thread), so post() is lock-free and callable from anywhere, while
-	// exactly one consumer - the audio thread - calls drain(). Besides the ordered
-	// queue, the latest value of every control is kept; a queue overflow marks the
-	// control dirty so its final state is applied even if intermediate values are
-	// lost. A button can therefore never stay held because a release was dropped.
+	// audio thread) and physical MIDI arrives on its own thread, so post() and turn()
+	// are lock-free and callable from anywhere, while exactly one consumer - the
+	// audio thread - calls drain(). Besides the ordered queue, the latest value of
+	// every button is kept; a queue overflow marks the button dirty so its final
+	// state is applied even if intermediate values are lost. A button can therefore
+	// never stay held because a release was dropped. Encoder steps lost to an
+	// overflow are accumulated and delivered after the queue.
 	//
 	// JUCE-free so it can be tested headless.
 	class PanelHostInput
@@ -30,6 +34,9 @@ namespace mdJucePlugin
 		static constexpr size_t g_queueCapacity = 256;
 		// Long enough for the firmware's panel scan to see a tap as a press.
 		static constexpr double g_tapMilliseconds = 40.0;
+		// Encoder ticks per encoder and drain. The machine's panel FIFO holds 512
+		// packets and drops ticks that do not fit; the rest is sent next drain.
+		static constexpr int g_maxTicksPerDrain = 64;
 
 		enum class ButtonMode : uint8_t
 		{
@@ -40,26 +47,24 @@ namespace mdJucePlugin
 			Tap
 		};
 
-		enum class Delivery : uint8_t
-		{
-			Mapped,				// the mapper turns the change into panel events
-			AlreadyDelivered	// the editor sent the ticks itself; only move the base
-		};
-
 		enum class Source : uint8_t
 		{
-			// Hosts, automation and validators. Withheld until the firmware is ready:
-			// keys held during boot open the startup menu (test mode, resets, OS
-			// upgrade), which a validator setting every parameter would otherwise reach.
+			// Host parameters: hosts, automation and validators. Withheld until the
+			// firmware is ready: keys held during boot open the startup menu (test
+			// mode, resets, OS upgrade), which a validator setting every parameter
+			// would otherwise reach.
 			Host,
 			// The user in the editor. Delivered at any time, as on the hardware.
-			Editor
+			Editor,
+			// A MIDI controller on the panel channel. Always momentary, withheld
+			// while booting like host input, and never reflected in host parameters.
+			PanelMidi
 		};
 
 		struct DrainContext
 		{
-			double nowMilliseconds = 0.0;	// audio-sample clock, see Controller
-			bool firmwareReady = false;		// gates host input and recentring
+			double nowMilliseconds = 0.0;	// machine time, see Controller
+			bool firmwareReady = false;		// gates host and panel MIDI input
 			uint64_t hardwareEpoch = 0;
 		};
 
@@ -67,42 +72,48 @@ namespace mdJucePlugin
 		{
 		}
 
-		// Any thread. False if the address is not a panel control of this model.
-		bool post(const uint8_t _page, const uint8_t _index, const int _value,
-			const Delivery _delivery = Delivery::Mapped, const Source _source = Source::Host)
+		// Any thread. A button or encoder push; false if the address is not a panel
+		// control of this model.
+		bool post(const uint8_t _page, const uint8_t _index, const int _value, const Source _source = Source::Host)
 		{
 			const auto slot = slotFor(_page, _index);
 			if(!slot)
 				return false;
-			const auto value = static_cast<uint8_t>(std::clamp(_value, 0,
-				static_cast<int>(md::PanelGestureMapper::g_encoderMaximum)));
+			const auto value = static_cast<uint8_t>(_value != 0 ? 1 : 0);
 			m_latest[*slot].store(value, std::memory_order_release);
-			if(!m_queue.tryPush({*slot, value, _delivery, _source}))
-			{
-				auto& dirty = _delivery == Delivery::Mapped ? m_dirty : m_adoptDirty;
-				dirty[*slot / 64].fetch_or(uint64_t{1} << (*slot % 64), std::memory_order_acq_rel);
-			}
+			m_latestSource[*slot].store(_source, std::memory_order_release);
+			if(!m_queue.tryPush({Kind::Row, *slot, value, 0, _source}))
+				m_dirty.fetch_or(uint64_t{1} << *slot, std::memory_order_acq_rel);
 			return true;
 		}
 
-		// Any thread. Applies to host input only; the editor is always momentary.
+		// Any thread. Turns an endless encoder by _steps ticks; false if the model
+		// has no such encoder.
+		bool turn(const md::PanelEncoder _encoder, const int _steps, const Source _source = Source::PanelMidi)
+		{
+			const auto index = static_cast<uint8_t>(_encoder);
+			if(index >= g_encoderCount || !md::PanelGestureMapper::supportsEncoder(m_model, _encoder))
+				return false;
+			if(_steps == 0)
+				return true;
+			const auto steps = static_cast<int16_t>(std::clamp(_steps, -g_maxQueuedSteps, g_maxQueuedSteps));
+			if(!m_queue.tryPush({Kind::Turn, index, 0, steps, _source}))
+				m_overflowSteps[index].fetch_add(steps, std::memory_order_acq_rel);
+			return true;
+		}
+
+		// Any thread. Applies to host parameters only; the editor and panel MIDI
+		// are always momentary.
 		void setHostButtonMode(const ButtonMode _mode)
 		{
 			m_buttonMode.store(_mode, std::memory_order_release);
 		}
 
 		// Any thread. The next drain releases every held control, e.g. after a
-		// project load, and returns the encoders to the centre.
+		// project load.
 		void requestReset()
 		{
 			m_resetRequested.store(true, std::memory_order_release);
-		}
-
-		// Any thread. One bit per md::PanelEncoder whose host value should be moved
-		// back to the centre; each request is reported once.
-		uint32_t takeRecentreRequests()
-		{
-			return m_recentreRequests.exchange(0, std::memory_order_acq_rel);
 		}
 
 		// Audio thread only. Drops everything queued, e.g. while no local device
@@ -113,13 +124,10 @@ namespace mdJucePlugin
 			for(size_t i = 0; i < g_queueCapacity && m_queue.tryPop(entry); ++i)
 			{
 			}
-			for(auto& word : m_dirty)
-				word.store(0, std::memory_order_release);
-			for(auto& word : m_adoptDirty)
-				word.store(0, std::memory_order_release);
-			m_mapper.reset();
-			m_recentrePending = 0;
-			clearTaps();
+			m_dirty.store(0, std::memory_order_release);
+			for(auto& steps : m_overflowSteps)
+				steps.store(0, std::memory_order_release);
+			forgetMachine();
 		}
 
 		// Audio thread only. Calls _sink(const md::PanelEvent&) for each event.
@@ -138,17 +146,13 @@ namespace mdJucePlugin
 			{
 				// A replaced machine boots with every control released.
 				m_hardwareEpoch = _context.hardwareEpoch;
-				m_mapper.reset();
-				m_recentrePending = 0;
-				clearTaps();
+				forgetMachine();
 			}
 			if(m_resetRequested.exchange(false, std::memory_order_acq_rel))
 			{
 				m_mapper.releaseAll(output);
 				flush();
-				m_mapper.reset();
-				m_recentrePending = 0;
-				clearTaps();
+				forgetMachine();
 			}
 			for(uint8_t slot = 0; slot < g_slotCount; ++slot)
 			{
@@ -159,73 +163,75 @@ namespace mdJucePlugin
 				flush();
 			}
 
+			std::array<int, g_encoderCount> budget{};
+			budget.fill(g_maxTicksPerDrain);
+			// Accepted ticks that did not fit wait while the firmware is not ready.
+			for(uint8_t e = 0; e < g_encoderCount && _context.firmwareReady; ++e)
+			{
+				const auto carried = m_carrySteps[e];
+				m_carrySteps[e] = 0;
+				emitTicks(e, carried, budget, output, flush);
+			}
+
 			Entry entry;
 			for(size_t i = 0; i < g_queueCapacity && m_queue.tryPop(entry); ++i)
 			{
-				apply(entry.slot, entry.value, entry.delivery, entry.source, _context, output);
+				const auto withheld = isWithheld(entry.source, _context);
+				if(entry.kind == Kind::Turn)
+				{
+					if(!withheld)
+						emitTicks(entry.index, entry.steps, budget, output, flush);
+					continue;
+				}
+				applyRowControl(entry.index, entry.value, entry.source, withheld, _context, output);
 				flush();
 			}
-			for(size_t word = 0; word < m_adoptDirty.size(); ++word)
-			{
-				// The latest value already includes any later mapped change of the
-				// same control, so adopting it settles both kinds of overflow.
-				auto bits = m_adoptDirty[word].exchange(0, std::memory_order_acq_rel);
-				m_dirty[word].fetch_and(~bits, std::memory_order_acq_rel);
-				while(bits != 0)
-				{
-					const auto bit = static_cast<size_t>(countTrailingZeros(bits));
-					bits &= bits - 1;
-					const auto slot = static_cast<uint8_t>(word * 64 + bit);
-					apply(slot, m_latest[slot].load(std::memory_order_acquire), Delivery::AlreadyDelivered,
-						Source::Editor, _context, output);
-				}
-			}
-			for(size_t word = 0; word < m_dirty.size(); ++word)
-			{
-				auto bits = m_dirty[word].exchange(0, std::memory_order_acq_rel);
-				while(bits != 0)
-				{
-					const auto bit = static_cast<size_t>(countTrailingZeros(bits));
-					bits &= bits - 1;
-					const auto slot = static_cast<uint8_t>(word * 64 + bit);
-					// The origin of an overflowed change is unknown; treat it as host input.
-					apply(slot, m_latest[slot].load(std::memory_order_acquire), Delivery::Mapped, Source::Host,
-						_context, output);
-					flush();
-				}
-			}
 
-			if(!_context.firmwareReady)
-				return;
+			auto bits = m_dirty.exchange(0, std::memory_order_acq_rel);
+			while(bits != 0)
+			{
+				const auto slot = static_cast<uint8_t>(countTrailingZeros(bits));
+				bits &= bits - 1;
+				const auto source = m_latestSource[slot].load(std::memory_order_acquire);
+				applyRowControl(slot, m_latest[slot].load(std::memory_order_acquire), source,
+					isWithheld(source, _context), _context, output);
+				flush();
+			}
 			for(uint8_t e = 0; e < g_encoderCount; ++e)
 			{
-				const auto bit = 1u << e;
-				if((m_recentrePending & bit) == 0
-					&& m_mapper.recentreTarget(static_cast<md::PanelEncoder>(e), _context.nowMilliseconds))
-				{
-					m_recentrePending |= bit;
-					m_recentreRequests.fetch_or(bit, std::memory_order_acq_rel);
-				}
+				// The origin of overflowed steps is unknown; treat them as gated input.
+				const auto steps = m_overflowSteps[e].exchange(0, std::memory_order_acq_rel);
+				if(!_context.firmwareReady)
+					continue;
+				emitTicks(e, steps, budget, output, flush);
 			}
 		}
 
 	private:
 		using Output = md::PanelGestureMapper::Output;
 
+		enum class Kind : uint8_t
+		{
+			Row,
+			Turn
+		};
+
 		struct Entry
 		{
-			uint8_t slot = 0;
+			Kind kind = Kind::Row;
+			uint8_t index = 0;		// slot for rows, md::PanelEncoder for turns
 			uint8_t value = 0;
-			Delivery delivery = Delivery::Mapped;
+			int16_t steps = 0;
 			Source source = Source::Host;
 		};
 
+		static constexpr int g_maxQueuedSteps = 1024;
 		static constexpr uint8_t g_buttonCount = static_cast<uint8_t>(md::PanelControl::ClassicExtended) + 1;
 		static constexpr uint8_t g_encoderCount = static_cast<uint8_t>(md::PanelEncoder::SoundSelection) + 1;
 		static constexpr uint8_t g_pushCount = static_cast<uint8_t>(md::PanelEncoder::DataEntryH) + 1;
-		static constexpr uint8_t g_firstEncoderSlot = g_buttonCount;
-		static constexpr uint8_t g_firstPushSlot = g_firstEncoderSlot + g_encoderCount;
+		static constexpr uint8_t g_firstPushSlot = g_buttonCount;
 		static constexpr size_t g_slotCount = g_firstPushSlot + g_pushCount;
+		static_assert(g_slotCount <= 64, "one dirty word holds every button");
 
 		static int countTrailingZeros(uint64_t _bits)
 		{
@@ -238,6 +244,11 @@ namespace mdJucePlugin
 			return count;
 		}
 
+		static bool isWithheld(const Source _source, const DrainContext& _context)
+		{
+			return _source != Source::Editor && !_context.firmwareReady;
+		}
+
 		std::optional<uint8_t> slotFor(const uint8_t _page, const uint8_t _index) const
 		{
 			namespace pp = md::panelParameters;
@@ -245,9 +256,6 @@ namespace mdJucePlugin
 			if(_page == pp::ButtonPage && _index < g_buttonCount
 				&& Mapper::supportsButton(m_model, static_cast<md::PanelControl>(_index)))
 				return _index;
-			if(_page == pp::EncoderPage && _index < g_encoderCount
-				&& Mapper::supportsEncoder(m_model, static_cast<md::PanelEncoder>(_index)))
-				return static_cast<uint8_t>(g_firstEncoderSlot + _index);
 			if(_page == pp::EncoderPushPage && _index < g_pushCount
 				&& Mapper::supportsEncoderPush(m_model, static_cast<md::PanelEncoder>(_index)))
 				return static_cast<uint8_t>(g_firstPushSlot + _index);
@@ -261,14 +269,40 @@ namespace mdJucePlugin
 			return m_mapper.setButton(static_cast<md::PanelControl>(_slot), _pressed, _output);
 		}
 
-		void clearTaps()
+		template<typename Flush>
+		void emitTicks(const uint8_t _encoder, int _steps, std::array<int, g_encoderCount>& _budget,
+			Output& _output, Flush& _flush)
 		{
+			const auto encoder = static_cast<md::PanelEncoder>(_encoder);
+			while(_steps != 0 && _budget[_encoder] > 0)
+			{
+				const auto request = std::clamp(_steps, -_budget[_encoder], _budget[_encoder]);
+				const auto sent = m_mapper.turnEncoder(encoder, request, _output);
+				_flush();
+				if(sent == 0)
+					break;
+				_steps -= sent;
+				_budget[_encoder] -= std::abs(sent);
+			}
+			m_carrySteps[_encoder] = std::clamp(m_carrySteps[_encoder] + _steps, -g_maxQueuedSteps, g_maxQueuedSteps);
+		}
+
+		void forgetMachine()
+		{
+			m_mapper.reset();
 			m_tapReleaseAt.fill(-1.0);
+			m_carrySteps.fill(0);
 		}
 
 		void applyRowControl(const uint8_t _slot, const uint8_t _value, const Source _source,
 			const bool _withheld, const DrainContext& _context, Output& _output)
 		{
+			if(_source == Source::PanelMidi)
+			{
+				if(!_withheld)
+					setRowControl(_slot, _value != 0, _output);
+				return;
+			}
 			if(_source == Source::Editor)
 			{
 				// The host echoes the editor's notification; make that a duplicate.
@@ -292,43 +326,20 @@ namespace mdJucePlugin
 				m_tapReleaseAt[_slot] = _context.nowMilliseconds + g_tapMilliseconds;
 		}
 
-		void apply(const uint8_t _slot, const uint8_t _value, const Delivery _delivery, const Source _source,
-			const DrainContext& _context, Output& _output)
-		{
-			const auto withheld = _source == Source::Host && !_context.firmwareReady;
-			if(_slot >= g_firstPushSlot || _slot < g_firstEncoderSlot)
-			{
-				applyRowControl(_slot, _value, _source, withheld, _context, _output);
-				return;
-			}
-			if(_slot >= g_firstEncoderSlot)
-			{
-				const auto encoder = static_cast<md::PanelEncoder>(_slot - g_firstEncoderSlot);
-				m_recentrePending &= ~(1u << (_slot - g_firstEncoderSlot));
-				if(withheld)
-					m_mapper.rebaseEncoder(encoder, _value);
-				else if(_delivery == Delivery::AlreadyDelivered)
-					m_mapper.adoptEncoderPosition(encoder, _value, _context.nowMilliseconds);
-				else
-					m_mapper.setEncoderPosition(encoder, _value, _context.nowMilliseconds, _output);
-				return;
-			}
-		}
-
 		const md::MachineModel m_model;
 		RealtimeQueue<Entry, g_queueCapacity> m_queue;
 		std::array<std::atomic<uint8_t>, g_slotCount> m_latest{};
-		std::array<std::atomic<uint64_t>, (g_slotCount + 63) / 64> m_dirty{};
-		std::array<std::atomic<uint64_t>, (g_slotCount + 63) / 64> m_adoptDirty{};
+		std::array<std::atomic<Source>, g_slotCount> m_latestSource{};
+		std::atomic<uint64_t> m_dirty{0};
+		std::array<std::atomic<int32_t>, g_encoderCount> m_overflowSteps{};
 		std::atomic<bool> m_resetRequested{false};
-		std::atomic<uint32_t> m_recentreRequests{0};
 		std::atomic<ButtonMode> m_buttonMode{ButtonMode::Momentary};
 
 		// Consumer-owned.
 		md::PanelGestureMapper m_mapper;
 		uint64_t m_hardwareEpoch = 0;
-		uint32_t m_recentrePending = 0;
 		std::array<uint8_t, g_slotCount> m_lastHostValue{};
+		std::array<int, g_encoderCount> m_carrySteps{};
 		std::array<double, g_slotCount> m_tapReleaseAt = makeIdleTaps();
 
 		static std::array<double, g_slotCount> makeIdleTaps()
