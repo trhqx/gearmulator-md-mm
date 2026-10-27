@@ -2196,6 +2196,143 @@ namespace mdJucePlugin
 				rml->enqueueUpdateOnce();
 	}
 
+	void Editor::installOsFromSyx()
+	{
+		auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
+		if(!processor || processor->getOsImages().getInstallStatus().running)
+			return;
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_osFlow, OsFlow::None, OsFlow::Choosing))
+			return;
+
+		auto& config = getProcessor().getConfig();
+		juce::File initial(config.getValue("osSyxLastDirectory"));
+		if(!initial.isDirectory())
+			initial = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+		m_osFileChooser = std::make_unique<juce::FileChooser>(
+			"Choose an Elektron OS upgrade (.syx) for this machine", initial, "*.syx", true);
+		const auto safeRoot = juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const std::function<void(const juce::FileChooser&)> completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_osFlow, OsFlow::Choosing, OsFlow::None,
+				[this](const juce::FileChooser& _chooser)
+				{
+					const auto file = _chooser.getResult();
+					if(!file.existsAsFile())
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
+					if(!processor)
+						return;
+					auto& config = getProcessor().getConfig();
+					config.setValue("osSyxLastDirectory", file.getParentDirectory().getFullPathName());
+					config.saveIfNeeded();
+
+					const auto base = md::RomLoader::findROM(m_model);
+					std::string error;
+					if(!base.isValid())
+						error = "The stock firmware image (.bin) was not found.";
+					else if(processor->getOsImages().startInstall(file, base.data(), error))
+						return;
+					genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+						"OS not installed", error, getRmlComponent());
+				});
+		m_osFileChooser->launchAsync(juce::FileBrowserComponent::openMode
+			| juce::FileBrowserComponent::canSelectFiles, completion);
+	}
+
+	void Editor::cancelOsInstall()
+	{
+		if(auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor()))
+			processor->getOsImages().cancelInstall();
+	}
+
+	void Editor::chooseOsImage()
+	{
+		auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
+		if(!processor)
+			return;
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_osFlow, OsFlow::None, OsFlow::Choosing))
+			return;
+
+		auto initial = processor->getSelectedOsImage();
+		if(!initial.existsAsFile())
+			initial = processor->getOsImages().getFolder();
+		if(!initial.exists())
+			initial = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
+
+		m_osFileChooser = std::make_unique<juce::FileChooser>(
+			"Choose an installed OS image (8 MiB .bin)", initial, "*.bin", true);
+		const auto safeRoot = juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const std::function<void(const juce::FileChooser&)> completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_osFlow, OsFlow::Choosing, OsFlow::None,
+				[this](const juce::FileChooser& _chooser)
+				{
+					const auto file = _chooser.getResult();
+					if(file.existsAsFile())
+						confirmOsSwitch(file);
+				});
+		m_osFileChooser->launchAsync(juce::FileBrowserComponent::openMode
+			| juce::FileBrowserComponent::canSelectFiles, completion);
+	}
+
+	void Editor::useStockOs()
+	{
+		confirmOsSwitch({});
+	}
+
+	void Editor::confirmOsSwitch(const juce::File& _image)
+	{
+		if(!jucePluginEditorLib::fileChooserFlow::tryBegin(m_osFlow, OsFlow::None, OsFlow::AwaitingConfirmation))
+			return;
+
+		const auto safeRoot = juce::Component::SafePointer<juceRmlUi::RmlComponent>(getRmlComponent());
+		const genericUI::MessageBox::Callback completion =
+			jucePluginEditorLib::fileChooserFlow::makeGuardedCompletion(
+				safeRoot, &m_osFlow, OsFlow::AwaitingConfirmation, OsFlow::None,
+				[this, _image](const genericUI::MessageBox::Result _answer)
+				{
+					if(_answer != genericUI::MessageBox::Result::Yes)
+						return;
+					auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
+					if(!processor)
+						return;
+					juce::String result;
+					const bool switched = processor->selectOsImage(_image, result);
+					genericUI::MessageBox::showOk(switched ? genericUI::MessageBox::Icon::Info
+							: genericUI::MessageBox::Icon::Warning,
+						switched ? "OS changed" : "OS unchanged", result.toStdString(), getRmlComponent());
+				});
+
+		const auto name = _image == juce::File() ? juce::String("the stock OS") : "'" + _image.getFileName() + "'";
+		const auto message = "Restart the machine with " + name + "?\n\n"
+			"Kits, patterns and songs in machine memory are kept, as on the hardware. "
+			"Samples in flash (MD-UW samples, MM DigiPRO waves) are not carried over. "
+			"Unsaved edits of the current sound are lost. "
+			"Projects saved with another OS may not load while this OS runs.";
+		genericUI::MessageBox::showYesNo(genericUI::MessageBox::Icon::Warning,
+			"Change the OS?", message.toStdString(), completion);
+	}
+
+	void Editor::serviceOsInstall()
+	{
+		auto* const processor = dynamic_cast<AudioPluginAudioProcessor*>(&getProcessor());
+		if(!processor)
+			return;
+		const auto status = processor->getOsImages().getInstallStatus();
+		if(status.running || status.finishedCount == m_osInstallShown || m_osFlow != OsFlow::None)
+			return;
+		m_osInstallShown = status.finishedCount;
+		if(!status.success)
+		{
+			genericUI::MessageBox::showOk(genericUI::MessageBox::Icon::Warning,
+				"OS not installed", status.message, getRmlComponent());
+			return;
+		}
+		// Offer to boot it right away; the image stays installed either way.
+		confirmOsSwitch(status.installedImage);
+	}
+
 	std::pair<std::string, std::string> Editor::getDemoRestrictionText() const
 	{
 		return {};

@@ -1,5 +1,7 @@
 #include "mdSettingsPanelFeel.h"
 
+#include "RmlUi/Core/StringUtilities.h"
+
 #include "mdController.h"
 #include "mdEditor.h"
 #include "mdLcdInteractionModel.h"
@@ -14,6 +16,7 @@
 #include "juceRmlUi/rmlHelper.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/StringUtilities.h"
 
 namespace mdJucePlugin
 {
@@ -85,7 +88,10 @@ namespace mdJucePlugin
 			});
 			updateRestoreAvailability();
 		}
-		if(m_restoreStorage || m_ramRecordingComplete || m_ramRecordingOriginal || m_panelMidiChannelInfo)
+		createOs(_root);
+
+		if(m_restoreStorage || m_ramRecordingComplete || m_ramRecordingOriginal || m_panelMidiChannelInfo
+			|| m_osRunning)
 			startTimerHz(2);
 	}
 
@@ -94,6 +100,74 @@ namespace mdJucePlugin
 		updateRestoreAvailability();
 		updateRamRecordingMode();
 		updatePanelMidi();	// the machine's own channel may change in its global menu
+		updateOs();
+	}
+
+	void SettingsPanelFeel::setLabel(Rml::Element* const _label, std::string& _cache, const std::string& _text)
+	{
+		if(!_label || _text == _cache)
+			return;
+		_cache = _text;
+		_label->SetInnerRML(Rml::StringUtilities::EncodeRml(_text));
+	}
+
+	void SettingsPanelFeel::createOs(Rml::Element* _root)
+	{
+		m_osRunning = juceRmlUi::helper::findChild(_root, "lbOsRunning", false);
+		m_osInstallStatus = juceRmlUi::helper::findChild(_root, "lbOsInstallStatus", false);
+		m_osInstall = juceRmlUi::helper::findChild(_root, "btOsInstall", false);
+		m_osCancel = juceRmlUi::helper::findChild(_root, "btOsCancel", false);
+		if(m_osInstall)
+			juceRmlUi::EventListener::AddClick(m_osInstall, [this] { m_editor.installOsFromSyx(); });
+		if(m_osCancel)
+			juceRmlUi::EventListener::AddClick(m_osCancel, [this] { m_editor.cancelOsInstall(); });
+		if(auto* const choose = juceRmlUi::helper::findChild(_root, "btOsChoose", false))
+			juceRmlUi::EventListener::AddClick(choose, [this] { m_editor.chooseOsImage(); });
+		if(auto* const stock = juceRmlUi::helper::findChild(_root, "btOsStock", false))
+			juceRmlUi::EventListener::AddClick(stock, [this] { m_editor.useStockOs(); });
+		updateOs();
+	}
+
+	void SettingsPanelFeel::updateOs()
+	{
+		if(!m_osRunning)
+			return;
+		auto& processor = static_cast<AudioPluginAudioProcessor&>(m_editor.getProcessor());
+		setLabel(m_osRunning, m_osRunningText, "Running: " + processor.getRunningOsDescription());
+
+		const auto status = processor.getOsImages().getInstallStatus();
+		std::string text;
+		if(status.running)
+		{
+			switch(status.phase)
+			{
+			case md::OsInstaller::Phase::Booting:
+				text = "Installing: starting the bootloader...";
+				break;
+			case md::OsInstaller::Phase::Sending:
+				text = "Installing: sending " + std::to_string(status.sentMessages) + " of "
+					+ std::to_string(status.totalMessages) + " messages...";
+				break;
+			case md::OsInstaller::Phase::Flashing:
+				text = "Installing: the bootloader is programming the flash...";
+				break;
+			case md::OsInstaller::Phase::Verifying:
+				text = "Installing: test-booting the installed OS...";
+				break;
+			}
+		}
+		else if(status.finishedCount)
+			text = status.message;
+		else
+			text = "Installed OS images are kept in " + processor.getOsImages().getFolder().getFullPathName().toStdString();
+		setLabel(m_osInstallStatus, m_osInstallStatusText, text);
+
+		if(m_osInstall)
+			juceRmlUi::helper::setEnabled(m_osInstall, !status.running);
+		if(m_osCancel)
+			juceRmlUi::helper::setEnabled(m_osCancel, status.running);
+
+		m_editor.serviceOsInstall();
 	}
 
 	Controller* SettingsPanelFeel::getController() const

@@ -372,6 +372,7 @@ namespace mdJucePlugin
 		, m_model(_model)
 		, m_initialPatchRam(std::move(_initialPatchRam))
 		, m_deviceHomePath(std::move(_deviceHomePath))
+		, m_osImages(_model, juce::File(juce::String::fromUTF8(getDataFolder().c_str())).getChildFile("os"))
 	{
 		if(m_model == md::MachineModel::Machinedrum)
 			m_ramRecordingMode.store(
@@ -824,12 +825,89 @@ namespace mdJucePlugin
 		return new PluginEditorState(*this);
 	}
 
+	juce::File AudioPluginAudioProcessor::getSelectedOsImage() const
+	{
+		const auto path = const_cast<AudioPluginAudioProcessor*>(this)->getConfig().getValue("osImage");
+		return path.isEmpty() ? juce::File() : juce::File(path);
+	}
+
+	void AudioPluginAudioProcessor::applySelectedOsImage(synthLib::DeviceCreateParams& _params) const
+	{
+		const auto image = getSelectedOsImage();
+		std::string description = "Stock OS";
+		if(image != juce::File())
+		{
+			std::vector<uint8_t> data;
+			std::string error;
+			if(m_osImages.readImage(image, data, error))
+			{
+				_params.romData = std::move(data);
+				_params.romName = image.getFullPathName().toStdString();
+				description = image.getFileNameWithoutExtension().toStdString();
+			}
+			else
+			{
+				// Keep the machine usable, but never silently: the settings page
+				// shows why the stock OS runs instead.
+				description = "Stock OS. The selected OS image " + image.getFullPathName().toStdString()
+					+ " was not used: " + error;
+			}
+		}
+		const std::scoped_lock lock(m_runningOsMutex);
+		m_runningOs = std::move(description);
+	}
+
+	std::string AudioPluginAudioProcessor::getRunningOsDescription() const
+	{
+		const std::scoped_lock lock(m_runningOsMutex);
+		return m_runningOs;
+	}
+
+	bool AudioPluginAudioProcessor::selectOsImage(const juce::File& _image, juce::String& _result)
+	{
+		if(_image != juce::File())
+		{
+			std::vector<uint8_t> data;
+			std::string error;
+			if(!m_osImages.readImage(_image, data, error))
+			{
+				_result = "The OS was not changed. " + juce::String(error);
+				return false;
+			}
+		}
+
+		// Patch RAM is battery-backed on the hardware and survives an OS change.
+		std::vector<uint8_t> patchRam;
+		getPlugin().withDeviceLocked([&patchRam](synthLib::Device* const _device)
+		{
+			if(auto* const device = dynamic_cast<md::Device*>(_device))
+				patchRam = device->getHardware().copyPatchRam();
+		});
+
+		auto& config = getConfig();
+		config.setValue("osImage", _image == juce::File() ? juce::String() : _image.getFullPathName());
+		config.saveIfNeeded();
+
+		m_rebootPatchRam = std::move(patchRam);
+		const bool rebooted = rebootDevice();
+		m_rebootPatchRam.clear();
+		if(!rebooted)
+		{
+			_result = "The machine could not be restarted with the selected OS.";
+			return false;
+		}
+		_result = "The machine restarted with: " + juce::String(getRunningOsDescription());
+		return true;
+	}
+
 	synthLib::Device* AudioPluginAudioProcessor::createDevice()
 	{
 		synthLib::DeviceCreateParams params;
 		params.customData = md::deviceCustomData(m_model);
 		params.homePath = m_deviceHomePath ? *m_deviceHomePath : getDataFolder();
-		auto d = std::make_unique<md::Device>(params, m_initialPatchRam);
+		applySelectedOsImage(params);
+		auto d = std::make_unique<md::Device>(params,
+			m_rebootPatchRam.empty() ? m_initialPatchRam : m_rebootPatchRam);
 		if(!d->isValid())
 			throw synthLib::DeviceException(synthLib::DeviceError::FirmwareMissing,
 				std::string("A ") + productName(m_model) +
@@ -868,6 +946,10 @@ namespace mdJucePlugin
 	{
 		Processor::getRemoteDeviceParams(_params);
 		_params.customData = md::deviceCustomData(m_model);
+
+		applySelectedOsImage(_params);
+		if(!_params.romData.empty())
+			return;
 
 		auto rom = md::RomLoader::findROM(m_model);
 

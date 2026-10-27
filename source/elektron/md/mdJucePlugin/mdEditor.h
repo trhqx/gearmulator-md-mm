@@ -81,6 +81,13 @@ namespace mdJucePlugin
 		void chooseStorageImage();
 		void restorePreviousStorage();
 		bool hasStorageRecoveryImage() const;
+		// Operating system (settings page).
+		void installOsFromSyx();
+		void cancelOsInstall();
+		void chooseOsImage();
+		void useStockOs();
+		// Shows the result of a finished installation once; settings timer.
+		void serviceOsInstall();
 		void chooseUserSysexFile();
 		void cancelUserSysexTransfer();
 		bool canResumeUserSysexTransfer() const;
@@ -168,6 +175,15 @@ namespace mdJucePlugin
 		void launchUserSysexFileChooser(const md::SysexImportTicket& _ticket);
 		void showUserSysexError(const juce::String& _message);
 		void serviceUserSysexProgress();
+
+		void confirmOsSwitch(const juce::File& _image);
+
+		enum class OsFlow
+		{
+			None,
+			Choosing,
+			AwaitingConfirmation
+		};
 
 		enum class StorageImageFlow
 		{
@@ -263,6 +279,9 @@ namespace mdJucePlugin
 		std::array<RawLedElem, 20> m_mmPanelLeds{};
 		std::unique_ptr<juce::FileChooser> m_storageFileChooser;
 		StorageImageFlow m_storageImageFlow = StorageImageFlow::None;
+		std::unique_ptr<juce::FileChooser> m_osFileChooser;
+		OsFlow m_osFlow = OsFlow::None;
+		uint32_t m_osInstallShown = 0;	// OsImages finishedCount already reported
 		std::unique_ptr<juce::FileChooser> m_sysexFileChooser;
 		bool m_sysexChooserOpen = false;
 		bool m_sysexTransferWasActive = false;

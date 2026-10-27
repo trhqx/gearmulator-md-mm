@@ -26,6 +26,7 @@ set(SOURCES
 	mdPluginEditorState.cpp mdPluginEditorState.h
 	mdProductSkinPolicy.h
 	mdProductSkins.h
+	mdOsImages.cpp mdOsImages.h
 	mdPluginProcessor.cpp mdPluginProcessor.h
 	mdStorageImage.cpp mdStorageImage.h
 	mdPluginEntry.cpp
@@ -310,6 +311,12 @@ if(BUILD_TESTING)
 	add_test(NAME mdPanelHostParameterFirmwareTest COMMAND mdPanelHostParameterFirmwareTest)
 	set_tests_properties(mdPanelHostParameterFirmwareTest PROPERTIES
 		LABELS "Integration;FirmwareTest;Panel" SKIP_RETURN_CODE 77 TIMEOUT 300)
+
+	add_md_automation_firmware_test(mdOsSelectionFirmwareTest
+		mdOsSelectionFirmwareTest.cpp)
+	add_test(NAME mdOsSelectionFirmwareTest COMMAND mdOsSelectionFirmwareTest)
+	set_tests_properties(mdOsSelectionFirmwareTest PROPERTIES
+		LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 600)
 
 	add_md_automation_firmware_test(mdAutomationRobustnessTest
 		mdAutomationRobustnessTest.cpp)

@@ -33,6 +33,9 @@ namespace mdJucePlugin
 		void updateRamRecordingMode();
 		void createPanelMidi(Rml::Element* _root);
 		void updatePanelMidi();
+		void createOs(Rml::Element* _root);
+		void updateOs();
+		static void setLabel(Rml::Element* _label, std::string& _cache, const std::string& _text);
 		Controller* getController() const;
 
 		Editor& m_editor;
@@ -46,5 +49,11 @@ namespace mdJucePlugin
 		std::string m_panelMidiChannelInfoText;
 		std::string m_panelMidiMappingCountText;
 		baseLib::EventListener<> m_onPanelMidiMapChanged;
+		Rml::Element* m_osRunning = nullptr;
+		Rml::Element* m_osInstallStatus = nullptr;
+		Rml::Element* m_osInstall = nullptr;
+		Rml::Element* m_osCancel = nullptr;
+		std::string m_osRunningText;
+		std::string m_osInstallStatusText;
 	};
 }

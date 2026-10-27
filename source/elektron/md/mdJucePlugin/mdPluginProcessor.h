@@ -1,6 +1,7 @@
 #pragma once
 
 #include "jucePluginEditorLib/pluginProcessor.h"
+#include "mdOsImages.h"
 #include "mdLib/mdtypes.h"
 #include "synthLib/performanceReport.h"
 
@@ -56,6 +57,17 @@ namespace mdJucePlugin
 		}
 		bool isRamRecordingModeAvailable();
 
+		// Operating system. An installed OS image (see OsImages) replaces the
+		// stock image when the machine boots; none selected = stock OS.
+		OsImages& getOsImages() { return m_osImages; }
+		juce::File getSelectedOsImage() const;
+		// Selects an installed image (an empty File selects the stock OS) and
+		// reboots the machine with it. Kits, patterns and songs in patch RAM
+		// are carried over, as on the hardware.
+		bool selectOsImage(const juce::File& _image, juce::String& _result);
+		// Which OS the current machine runs, and why if not the selected one.
+		std::string getRunningOsDescription() const;
+
 	    jucePluginEditorLib::PluginEditorState* createEditorState() override;
 	    synthLib::Device* createDevice() override;
 		void getRemoteDeviceParams(synthLib::DeviceCreateParams& _params) const override;
@@ -73,6 +85,8 @@ namespace mdJucePlugin
 			std::vector<uint8_t> _initialPatchRam, bool _allowMcpServer,
 			bool _ephemeralConfig,
 			std::optional<std::string> _deviceHomePath = std::nullopt);
+		// Fills romData/romName from the selected OS image, if any.
+		void applySelectedOsImage(synthLib::DeviceCreateParams& _params) const;
 		bool serviceDeferredStateRestore();
 		bool serviceStateRestoreFailure();
 		void recordStandaloneStartupDiagnostics();
@@ -85,6 +99,7 @@ namespace mdJucePlugin
 		const md::MachineModel m_model;
 		const std::vector<uint8_t> m_initialPatchRam;
 		const std::optional<std::string> m_deviceHomePath;
+		OsImages m_osImages;
 		std::mutex m_storageLoadMutex;
 		uint64_t m_reportedRestoreFailureGeneration = 0;
 		juce::File m_startupDiagnosticsFile;
@@ -93,6 +108,10 @@ namespace mdJucePlugin
 		std::atomic<uint8_t> m_ramRecordingMode{
 			static_cast<uint8_t>(md::RamRecordingMode::Original)};
 		bool m_ramRecordingModeChunkSeen = false;
+		// Patch RAM handed to the next createDevice() only (OS switch reboot).
+		std::vector<uint8_t> m_rebootPatchRam;
+		mutable std::mutex m_runningOsMutex;
+		mutable std::string m_runningOs;
 		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(AudioPluginAudioProcessor)
 	};
 }

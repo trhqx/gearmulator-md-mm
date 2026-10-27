@@ -1,5 +1,21 @@
 <template name="tus_settings_gui_Machinedrum">
 <head>
+	<style>
+		.settings-os-actions {
+			display: flex;
+			flex-direction: column;
+			gap: 6dp;
+			width: 100%;
+		}
+		.settings-os-actions .button {
+			display: block;
+			box-sizing: border-box;
+			width: 100%;
+		}
+		.settings-os-actions .button:disabled {
+			opacity: 0.45;
+		}
+	</style>
 </head>
 <body>
 	<settingsspacer1/>
@@ -181,6 +197,23 @@
 	<settingsspacer1/>
 	<label id="lbPanelMidiMappingCount"></label>
 
+	<settingsspacer1/>
+	<h1>Operating System</h1>
+	<settingsspacer1/>
+	<label>Install an OS from an Elektron OS upgrade file (.syx). In the background the plugin starts the machine's own bootloader (EARLY STARTUP MENU, MIDI UPGRADE), sends the file and saves the programmed flash as an 8 MiB .bin image. This takes a few minutes. The stock .bin is still needed as the base.</label>
+	<settingsspacer1/>
+	<label id="lbOsRunning"></label>
+	<settingsspacer1/>
+	<div class="settings-os-actions">
+		<button id="btOsInstall" class="button">Install OS from .syx...</button>
+		<button id="btOsCancel" class="button">Cancel Installation</button>
+		<button id="btOsChoose" class="button">Use Installed OS...</button>
+		<button id="btOsStock" class="button">Use Stock OS</button>
+	</div>
+	<settingsspacer1/>
+	<label id="lbOsInstallStatus"></label>
+	<settingsspacer1/>
+	<label>Switching restarts the machine and keeps kits, patterns and songs. Samples in flash (MD-UW samples, MM DigiPRO waves) are not carried over; reload the project after switching back. The emulation is tuned for OS 1.63; other OS versions are untested and may misbehave.</label>
 	<settingsspacer1/>
 	<h1>RAM Recording</h1>
 	<settingsspacer1/>
