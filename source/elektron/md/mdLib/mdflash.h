@@ -5,6 +5,20 @@
 
 namespace md
 {
+	// Erase block size of the Monomachine flash at a sector start, or 0 if the
+	// offset is not a sector start. Like the MD part it is bottom-boot: eight
+	// 8 KiB blocks below 64 KiB, 64 KiB blocks above. The OS upgrade erases the
+	// boot blocks from 0x4000 and stalls on a rejected erase.
+	constexpr uint32_t monomachineFlashSectorSize(const uint32_t _offset)
+	{
+		constexpr uint32_t bootLimit = 0x10000;
+		constexpr uint32_t bootSize = 0x2000;
+		constexpr uint32_t size = 0x10000;
+		if(_offset < bootLimit)
+			return (_offset % bootSize) == 0 ? bootSize : 0;
+		return (_offset % size) == 0 ? size : 0;
+	}
+
 	// AMD-compatible command interface used by the Machinedrum's 8 MiB NOR
 	// flash. The Microcontroller owns the bytes and applies returned mutations.
 	class FlashCommandDecoder

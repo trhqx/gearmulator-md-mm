@@ -44,10 +44,9 @@ namespace md
 	{
 		if(_romData.empty())
 			return RomLoader::findROM(_model);
-		Rom rom(_romData, _romName);
-		if(rom.isValid() && RomLoader::isRomForModel(rom.data(), _model))
-			return rom;
-		return RomLoader::findROM(_model);
+		// An explicitly supplied image (e.g. an installed OS) must never be
+		// silently replaced by the stock image.
+		return RomLoader::loadImage(_romData, _romName, _model);
 	}
 
 	uint64_t fingerprintRom(const std::vector<uint8_t>& _data)
@@ -1291,8 +1290,16 @@ namespace md
 			}
 		}
 		// A DSP that is not yet runnable is parked at the target so it is never chosen as the laggard.
-		double dsp1Pos = m_schedDspOriginLatched[0] ? schedDspFramePos(0) : target;
-		double dsp2Pos = m_schedDspOriginLatched[1] ? schedDspFramePos(1) : target;
+		// So is a halted one: a DSP whose PC left program memory (dsp56k::DSP::onInvalidPC) never
+		// executes again, its position never advances, and stepping it would only sleep - advance()
+		// would never return. This happens after an OS upgrade, when the bootloader resets the
+		// machine and the emulated DSPs cannot follow.
+		const auto halted = [](Dsp& _dsp)
+		{
+			return _dsp.dsp().getPC().toWord() >= _dsp.dsp().memory().sizeP();
+		};
+		double dsp1Pos = m_schedDspOriginLatched[0] && !halted(m_dspMixer) ? schedDspFramePos(0) : target;
+		double dsp2Pos = m_schedDspOriginLatched[1] && !halted(m_dspProducer) ? schedDspFramePos(1) : target;
 
 		// MM host traffic is a flow-controlled lossless stream. Park a backlogged
 		// DSP slice until the UC drains below

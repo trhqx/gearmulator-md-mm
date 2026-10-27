@@ -315,3 +315,16 @@ target_link_libraries(mdPanelMidiMapTest PRIVATE mdLib)
 add_test(NAME mdPanelMidiMapTest COMMAND mdPanelMidiMapTest)
 set_tests_properties(mdPanelMidiMapTest PROPERTIES LABELS "UnitTest;Panel" TIMEOUT 10)
 set_property(TARGET mdPanelMidiMapTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdOsUpgradeFileTest osUpgradeFileTest.cpp)
+target_link_libraries(mdOsUpgradeFileTest PRIVATE mdLib)
+add_test(NAME mdOsUpgradeFileTest COMMAND mdOsUpgradeFileTest)
+set_tests_properties(mdOsUpgradeFileTest PROPERTIES LABELS "UnitTest" TIMEOUT 10)
+set_property(TARGET mdOsUpgradeFileTest PROPERTY FOLDER "Elektron/test")
+
+add_executable(mdOsInstallFirmwareTest osInstallFirmwareTest.cpp)
+target_link_libraries(mdOsInstallFirmwareTest PRIVATE mdLib)
+add_test(NAME mdOsInstallFirmwareTest COMMAND mdOsInstallFirmwareTest)
+set_tests_properties(mdOsInstallFirmwareTest PROPERTIES
+	LABELS "Integration;FirmwareTest" SKIP_RETURN_CODE 77 TIMEOUT 1800)
+set_property(TARGET mdOsInstallFirmwareTest PROPERTY FOLDER "Elektron/test")

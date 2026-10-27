@@ -19,6 +19,7 @@ set(SOURCES
 	mdmc.cpp mdmc.h
 	mdmemorymap.h
 	mdmidiprotocol.h
+	mdosinstaller.cpp mdosinstaller.h
 	mdsysexautomation.cpp mdsysexautomation.h
 	mdrealtimemidiqueue.h
 	mdpanel.cpp mdpanel.h

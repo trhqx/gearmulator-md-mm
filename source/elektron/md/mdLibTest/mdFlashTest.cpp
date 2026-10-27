@@ -138,6 +138,67 @@ int main()
 		|| flash.read16(secondRegularBlock + 0x12) != 0x1357)
 		return fail("FAIL: regular erase crossed a 64 KiB block");
 
+	// MM flash: bit-reversed command addresses, bottom-boot geometry. The OS
+	// upgrade erases the 8 KiB boot blocks from 0x4000 and stalls if one is
+	// rejected.
+	{
+		md::Rom mmRom(bytes, "synthetic-mm-flash.bin");
+		md::Microcontroller mm(mmRom, md::MachineModel::Monomachine);
+		constexpr uint32_t aa = g_flashBase + 0xaaa;
+		constexpr uint32_t bb = g_flashBase + 0x554;
+		const auto mmProgram = [&](const uint32_t _address, const uint16_t _value)
+		{
+			mm.write16(aa, 0xaaaa);
+			mm.write16(bb, 0x5555);
+			mm.write16(aa, 0xa0a0);
+			mm.write16(_address, _value);
+		};
+		const auto mmErase = [&](const uint32_t _address)
+		{
+			mm.write16(aa, 0xaaaa);
+			mm.write16(bb, 0x5555);
+			mm.write16(aa, 0x8080);
+			mm.write16(aa, 0xaaaa);
+			mm.write16(bb, 0x5555);
+			mm.write16(_address, 0x3030);
+		};
+		mmProgram(secondBootBlock + 0x12, 0x1234);
+		mmProgram(thirdBootBlock + 0x12, 0x5678);
+		mmProgram(thirdBootBlock + 0x1ffe, 0x2468);
+		mmProgram(thirdBootBlock + 0x2012, 0x3579);
+		mmProgram(finalBootBlock + 0x12, 0x9abc);
+		mmProgram(firstRegularBlock + 0x12, 0xdef0);
+		mmProgram(secondRegularBlock + 0x12, 0x1357);
+		if(mm.read16(thirdBootBlock + 0x12) != 0x5678)
+			return fail("FAIL: MM program command did not change the flash image");
+
+		mmErase(thirdBootBlock);
+		if(mm.read16(thirdBootBlock + 0x12) != 0xffff
+			|| mm.read16(thirdBootBlock + 0x1ffe) != 0xffff)
+			return fail("FAIL: MM 8 KiB boot block at 0x4000 was not erased");
+		if(mm.read16(secondBootBlock + 0x12) != 0x1234
+			|| mm.read16(thirdBootBlock + 0x2012) != 0x3579)
+			return fail("FAIL: MM boot block erase crossed an 8 KiB block");
+		mmErase(finalBootBlock);
+		if(mm.read16(finalBootBlock + 0x12) != 0xffff
+			|| mm.read16(firstRegularBlock + 0x12) != 0xdef0)
+			return fail("FAIL: MM final boot block erase crossed the 64 KiB boundary");
+		mmErase(firstRegularBlock);
+		if(mm.read16(firstRegularBlock + 0x12) != 0xffff
+			|| mm.read16(secondRegularBlock + 0x12) != 0x1357)
+			return fail("FAIL: MM regular erase crossed a 64 KiB block");
+		mmProgram(secondRegularBlock + 0x2000, 0x0f0f);
+		mmErase(secondRegularBlock + 0x2000);
+		if(mm.read16(secondRegularBlock + 0x2000) != 0x0f0f)
+			return fail("FAIL: MM misaligned erase above the boot blocks was accepted");
+
+		static_assert(md::monomachineFlashSectorSize(0x0000) == 0x2000);
+		static_assert(md::monomachineFlashSectorSize(0x4000) == 0x2000);
+		static_assert(md::monomachineFlashSectorSize(0x4001) == 0);
+		static_assert(md::monomachineFlashSectorSize(0x10000) == 0x10000);
+		static_assert(md::monomachineFlashSectorSize(0x12000) == 0);
+	}
+
 	std::puts("PASS: MD/shared AMD flash programming, command sequencing, and erase geometry");
 	return 0;
 }

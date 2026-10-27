@@ -54,4 +54,17 @@ namespace md
 	//   elektron_sfx6-60_os1.32b.bin: 11a37460a5f47fd1a4d911414288690e6e7da605
 	static constexpr uint64_t g_mdOs163Fingerprint = 0x33b7c1a9e29f43fdull;
 	static constexpr uint64_t g_mmOs132bFingerprint = 0xe1c1b461b6d0f21bull;
+
+	// An OS upgrade (.syx through the bootloader's MIDI UPGRADE) erases and
+	// programs the OS region only; the bootloader below it is never touched.
+	// Observed on both machines: the bootloader erases every sector in
+	// [g_osRegionBegin, g_osRegionEnd) and nothing else.
+	static constexpr uint32_t g_osRegionBegin = 0x4000;
+	static constexpr uint32_t g_osRegionEnd = 0x100000;
+
+	// FNV-1a of the bootloader region [0, g_osRegionBegin) of the images above.
+	// A complete image whose bootloader matches is the stock image with another
+	// OS installed.
+	static constexpr uint64_t g_mdBootloaderFingerprint = 0x17b4e9af660cd177ull;
+	static constexpr uint64_t g_mmBootloaderFingerprint = 0x6ddfe20a3c9c1517ull;
 }

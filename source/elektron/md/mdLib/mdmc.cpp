@@ -24,8 +24,8 @@ namespace md
 	namespace
 	{
 		// The SFX-60 MKII stores user DigiPRO waves in the uniform-sector portion
-		// of its AMD-compatible flash. Its sectors differ from the MD bottom-boot
-		// part handled by FlashCommandDecoder.
+		// of its AMD-compatible flash; the bootloader's OS upgrade also erases
+		// the bottom-boot blocks. See monomachineFlashSectorSize().
 		class MonomachineFlash final : public hwLib::Am29f
 		{
 		public:
@@ -36,9 +36,8 @@ namespace md
 
 			bool eraseSector(const uint32_t _address) const override
 			{
-				constexpr size_t sectorSize = 64 * 1024;
-				if((_address % sectorSize) != 0 || _address > m_size
-					|| sectorSize > m_size - _address)
+				const size_t sectorSize = monomachineFlashSectorSize(_address);
+				if(!sectorSize || _address > m_size || sectorSize > m_size - _address)
 					return false;
 				return Am29f::eraseSector(_address, sectorSize / 1024);
 			}
@@ -363,8 +362,10 @@ namespace md
 					m_mmPanelProbeIndex = 0;
 					// Descriptor reply. Queue the optional follow-up value as well;
 					// both stages share the UART receive FIFO.
+					// The descriptor value lands in the firmware's boot flag; 0x02
+					// means FUNCTION is held and enters the EARLY STARTUP MENU.
 					m_sim.queueRx(Sim::g_uartPanel, 0x23);
-					m_sim.queueRx(Sim::g_uartPanel, cfg);
+					m_sim.queueRx(Sim::g_uartPanel, m_bootHoldFunction ? uint8_t{0x02} : cfg);
 					if(cfg == 0x02)
 					{
 						m_sim.queueRx(Sim::g_uartPanel, 0x20);	// deep-path stage-4 terminator cmd
@@ -406,7 +407,8 @@ namespace md
 				// The 0x24,0x00,0x00 reply was found by tracing the firmware's
 				// receive path and advances it from panel probing into DSP setup.
 				m_sim.queueRx(Sim::g_uartPanel, 0x24);	// startup ready signature
-				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// startup flags (PANEL config default)
+				// startup flags: the row 0x24 key state; FUNCTION is mask 0x02
+				m_sim.queueRx(Sim::g_uartPanel, m_bootHoldFunction ? uint8_t{0x02} : uint8_t{0x00});
 				m_sim.queueRx(Sim::g_uartPanel, 0x00);	// model / status
 
 				// The panel is now present, so subsequent bytes are LCD/LED traffic.

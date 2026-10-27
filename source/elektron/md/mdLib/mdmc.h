@@ -138,6 +138,11 @@ namespace md
 			return m_sim.isReceiveInterruptEnabled(Sim::g_uartMidi);
 		}
 		bool isPanelHandshakeComplete() const { return m_panelDisplayReady; }
+		// Report FUNCTION as held at power-on, which enters the bootloader's
+		// EARLY STARTUP MENU. The firmware reads the key state once, from the
+		// panel's startup reply, so this must be set before the first advance;
+		// press packets sent during boot arrive too late.
+		void setBootHoldFunction(const bool _hold) { m_bootHoldFunction = _hold; }
 
 		// Drain complete MIDI messages written by the firmware to UART1 TX.
 		void readMidiOut(std::vector<synthLib::SMidiEvent>& _midiOut, uint64_t _nativeOrigin = 0);
@@ -259,6 +264,7 @@ namespace md
 		bool     m_mmPanelHandshakeDone = false;
 
 		bool     m_panelDisplayReady = false;	// enabled once the panel startup handshake completes
+		bool     m_bootHoldFunction = false;
 
 		void advanceAfterCpu(uint32_t _cycles);
 		uint32_t idleSelfBranchInstructions(uint32_t _maxCycles);

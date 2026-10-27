@@ -41,18 +41,28 @@ namespace
 	}
 
 	std::string mdFlashCacheFilename(const std::string& _homePath,
-		const md::MachineModel _model)
+		const md::MachineModel _model, const std::vector<uint8_t>& _romData)
 	{
 		if(_model != md::MachineModel::Machinedrum || _homePath.empty())
 			return {};
+		// The cache belongs to one firmware. An installed OS gets its own file so
+		// switching OS never overwrites the stock image's cache.
+		std::string tag = "1.63";
+		if(!_romData.empty() && !md::RomLoader::isRomForModel(_romData, _model))
+		{
+			char hex[17];
+			std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(
+				md::RomLoader::fingerprint(_romData.data(), _romData.size())));
+			tag = hex;
+		}
 		return baseLib::filesystem::validatePath(_homePath)
-			+ "nvram/md-uw-1.63-factory-v2.cache";
+			+ "nvram/md-uw-" + tag + "-factory-v2.cache";
 	}
 
 	std::string mdFlashCacheFilename(const synthLib::DeviceCreateParams& _params,
 		const md::MachineModel _model)
 	{
-		return mdFlashCacheFilename(_params.homePath, _model);
+		return mdFlashCacheFilename(_params.homePath, _model, _params.romData);
 	}
 
 	struct InitialMdFlash
@@ -69,16 +79,9 @@ namespace
 		if(filename.empty() || !baseLib::filesystem::readFile(cache, filename))
 			return {};
 
-		md::Rom rom;
-		if(!_params.romData.empty())
-		{
-			md::Rom supplied(_params.romData, _params.romName);
-			if(supplied.isValid() && md::RomLoader::isRomForModel(
-				supplied.data(), _model))
-				rom = std::move(supplied);
-		}
-		if(!rom.isValid())
-			rom = md::RomLoader::findROM(_model);
+		const md::Rom rom = _params.romData.empty()
+			? md::RomLoader::findROM(_model)
+			: md::RomLoader::loadImage(_params.romData, _params.romName, _model);
 
 		InitialMdFlash result;
 		if(!rom.isValid()
@@ -109,11 +112,7 @@ namespace
 		const md::MachineModel _model)
 	{
 		if(!_romData.empty())
-		{
-			md::Rom rom(_romData, _romName);
-			if(rom.isValid() && md::RomLoader::isRomForModel(rom.data(), _model))
-				return rom;
-		}
+			return md::RomLoader::loadImage(_romData, _romName, _model);
 		return md::RomLoader::findROM(_model);
 	}
 }
@@ -415,7 +414,8 @@ namespace md
 			patchRam = std::move(decoded.patchRam);
 			containsFlash = decoded.containsFlash;
 			auto factory = loadInitialMdFlash(stateRom,
-				mdFlashCacheFilename(_context->m_homePath, _context->m_model));
+				mdFlashCacheFilename(_context->m_homePath, _context->m_model,
+					_context->m_romData));
 			if(factory.cache.empty() && !_factoryFlash.cache.empty())
 			{
 				if(!decodeFactoryFlashCache(factory.flash, _factoryFlash.cache,

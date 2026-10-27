@@ -122,10 +122,13 @@ namespace md
 		uint64_t midiRxConsumedCount() const { return m_uc.midiRxConsumedCount(); }
 
 		Microcontroller& getUC() { return m_uc; }
+		// Boot into the EARLY STARTUP MENU; call before the first advance().
+		void setBootHoldFunction(const bool _hold) { m_uc.setBootHoldFunction(_hold); }
 		std::vector<uint8_t> copyPatchRam() const;
 		std::vector<uint8_t> copyFlashData() const { return m_uc.copyFlashData(); }
 		std::vector<uint8_t> copyUserFlash() const { return m_uc.copyUserFlash(); }
 		const std::vector<uint8_t>& flashBaseline() const { return m_rom.data(); }
+		const Rom& getRom() const { return m_rom; }
 		bool flashDirty() const { return m_uc.flashDirty(); }
 		bool factoryFlashCacheReady();
 		bool isFactoryFlashCacheReady() const
